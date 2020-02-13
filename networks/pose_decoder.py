@@ -6,13 +6,15 @@
 
 from __future__ import absolute_import, division, print_function
 
+from typing import ClassVar
+
 import torch
 import torch.nn as nn
 from collections import OrderedDict
 
 
 class PoseDecoder(nn.Module):
-    def __init__(self, num_ch_enc, num_input_features, num_frames_to_predict_for=None, stride=1):
+    def __init__(self, conv_layer, num_ch_enc, num_input_features, num_frames_to_predict_for=None, stride=1):
         super(PoseDecoder, self).__init__()
 
         self.num_ch_enc = num_ch_enc
@@ -23,10 +25,10 @@ class PoseDecoder(nn.Module):
         self.num_frames_to_predict_for = num_frames_to_predict_for
 
         self.convs = OrderedDict()
-        self.convs[("squeeze")] = nn.Conv2d(self.num_ch_enc[-1], 256, 1)
-        self.convs[("pose", 0)] = nn.Conv2d(num_input_features * 256, 256, 3, stride, 1)
-        self.convs[("pose", 1)] = nn.Conv2d(256, 256, 3, stride, 1)
-        self.convs[("pose", 2)] = nn.Conv2d(256, 6 * num_frames_to_predict_for, 1)
+        self.convs[("squeeze")] = conv_layer(self.num_ch_enc[-1], 256, 1)
+        self.convs[("pose", 0)] = conv_layer(num_input_features * 256, 256, 3, stride, 1)
+        self.convs[("pose", 1)] = conv_layer(256, 256, 3, stride, 1)
+        self.convs[("pose", 2)] = conv_layer(256, 6 * num_frames_to_predict_for, 1)
 
         self.relu = nn.ReLU()
 

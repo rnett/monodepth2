@@ -51,19 +51,21 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
-        self.models["encoder"] = networks.ResnetEncoder(
+        conv_layer = nn.Conv2d # could by CylindricalConv2d
+
+        self.models["encoder"] = networks.ResnetEncoder(conv_layer,
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
-        self.models["depth"] = networks.DepthDecoder(
+        self.models["depth"] = networks.DepthDecoder(conv_layer,
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
-                self.models["pose_encoder"] = networks.ResnetEncoder(
+                self.models["pose_encoder"] = networks.ResnetEncoder(conv_layer,
                     self.opt.num_layers,
                     self.opt.weights_init == "pretrained",
                     num_input_images=self.num_pose_frames)
@@ -71,17 +73,17 @@ class Trainer:
                 self.models["pose_encoder"].to(self.device)
                 self.parameters_to_train += list(self.models["pose_encoder"].parameters())
 
-                self.models["pose"] = networks.PoseDecoder(
+                self.models["pose"] = networks.PoseDecoder(conv_layer,
                     self.models["pose_encoder"].num_ch_enc,
                     num_input_features=1,
                     num_frames_to_predict_for=2)
 
             elif self.opt.pose_model_type == "shared":
-                self.models["pose"] = networks.PoseDecoder(
+                self.models["pose"] = networks.PoseDecoder(conv_layer,
                     self.models["encoder"].num_ch_enc, self.num_pose_frames)
 
             elif self.opt.pose_model_type == "posecnn":
-                self.models["pose"] = networks.PoseCNN(
+                self.models["pose"] = networks.PoseCNN(conv_layer,
                     self.num_input_frames if self.opt.pose_model_input == "all" else 2)
 
             self.models["pose"].to(self.device)
@@ -93,7 +95,7 @@ class Trainer:
 
             # Our implementation of the predictive masking baseline has the the same architecture
             # as our depth decoder. We predict a separate mask for each source frame.
-            self.models["predictive_mask"] = networks.DepthDecoder(
+            self.models["predictive_mask"] = networks.DepthDecoder(conv_layer,
                 self.models["encoder"].num_ch_enc, self.opt.scales,
                 num_output_channels=(len(self.opt.frame_ids) - 1))
             self.models["predictive_mask"].to(self.device)

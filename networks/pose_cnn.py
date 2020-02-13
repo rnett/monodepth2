@@ -6,26 +6,28 @@
 
 from __future__ import absolute_import, division, print_function
 
+from typing import ClassVar
+
 import torch
 import torch.nn as nn
 
 
 class PoseCNN(nn.Module):
-    def __init__(self, num_input_frames):
+    def __init__(self, conv_layer, num_input_frames):
         super(PoseCNN, self).__init__()
 
         self.num_input_frames = num_input_frames
 
         self.convs = {}
-        self.convs[0] = nn.Conv2d(3 * num_input_frames, 16, 7, 2, 3)
-        self.convs[1] = nn.Conv2d(16, 32, 5, 2, 2)
-        self.convs[2] = nn.Conv2d(32, 64, 3, 2, 1)
-        self.convs[3] = nn.Conv2d(64, 128, 3, 2, 1)
-        self.convs[4] = nn.Conv2d(128, 256, 3, 2, 1)
-        self.convs[5] = nn.Conv2d(256, 256, 3, 2, 1)
-        self.convs[6] = nn.Conv2d(256, 256, 3, 2, 1)
+        self.convs[0] = conv_layer(3 * num_input_frames, 16, 7, 2, 3)
+        self.convs[1] = conv_layer(16, 32, 5, 2, 2)
+        self.convs[2] = conv_layer(32, 64, 3, 2, 1)
+        self.convs[3] = conv_layer(64, 128, 3, 2, 1)
+        self.convs[4] = conv_layer(128, 256, 3, 2, 1)
+        self.convs[5] = conv_layer(256, 256, 3, 2, 1)
+        self.convs[6] = conv_layer(256, 256, 3, 2, 1)
 
-        self.pose_conv = nn.Conv2d(256, 6 * (num_input_frames - 1), 1)
+        self.pose_conv = conv_layer(256, 6 * (num_input_frames - 1), 1)
 
         self.num_convs = len(self.convs)
 
