@@ -13,15 +13,15 @@ import time
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from carla_dataset.config import load_csv, Config
-from carla_dataset.intrinsics import PinholeIntrinsics, CylindricalIntrinsics
+from carla_dataset.config import load_csv
+from carla_dataset.data import Side
+from carla_dataset.intrinsics import PinholeIntrinsics
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 
 import json
 
-from datasets.carla_dataset import CarlaDataset
-from networks.cylindrical_padding import CylindricalConv2d
+from datasets.carla_dataset import CarlaDataset, just_side
 from utils import *
 from kitti_utils import *
 from layers import *
@@ -30,14 +30,8 @@ import datasets
 import networks
 from IPython import embed
 
-
-def get_pinhole_front(r: Config):
-    return r.pinhole_data.front
-
-def get_cylindrical(r: Config):
-    return r.cylendrical_data
-
-class Trainer:
+#TODO extend Trainer?
+class CubemapTrainer:
     def __init__(self, options):
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
@@ -62,14 +56,7 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
-        if options.method == "cylindrical":
-            conv_layer = CylindricalConv2d
-            data_lambda = get_cylindrical
-            intrinsics = CylindricalIntrinsics()
-        else:
-            conv_layer = nn.Conv2d
-            data_lambda = get_pinhole_front
-            intrinsics = PinholeIntrinsics()
+        conv_layer = nn.Conv2d # could by CylindricalConv2d
 
         self.models["encoder"] = networks.ResnetEncoder(conv_layer,
             self.opt.num_layers, self.opt.weights_init == "pretrained")
@@ -133,13 +120,13 @@ class Trainer:
         num_train_samples = len(load_csv(options.train_data)) * 1000
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
-        train_dataset = CarlaDataset(load_csv(options.train_data), data_lambda, intrinsics,
+        train_dataset = CarlaDataset(load_csv(options.train_data), lambda x: x.pinhole_data.front, PinholeIntrinsics(),
             self.opt.frame_ids, 4, is_train=True)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
 
-        val_dataset = CarlaDataset(load_csv(options.val_data), data_lambda, intrinsics,
+        val_dataset = CarlaDataset(load_csv(options.val_data), lambda x: x.pinhole_data.front, PinholeIntrinsics(),
             self.opt.frame_ids, 4, is_train=True)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
@@ -157,8 +144,8 @@ class Trainer:
         self.backproject_depth = {}
         self.project_3d = {}
         for scale in self.opt.scales:
-            h = intrinsics.height // (2 ** scale)
-            w = intrinsics.width // (2 ** scale)
+            h = PinholeIntrinsics().height // (2 ** scale)
+            w = PinholeIntrinsics().width // (2 ** scale)
 
             self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w)
             self.backproject_depth[scale].to(self.device)
@@ -208,11 +195,25 @@ class Trainer:
         for batch_idx, inputs in enumerate(self.train_loader):
 
             before_op_time = time.time()
+            outputs = {}
+            losses = {}
+            for s in list(Side): # sides
+                res = self.process_batch(just_side(s, inputs))
+                outputs[s] = res[0]
+                losses[s] = res[1]
 
-            outputs, losses = self.process_batch(inputs)
+            cube_losses = self.compute_cubemap_losses(outputs)
+
+            #TODO make total loss first?
 
             self.model_optimizer.zero_grad()
-            losses["loss"].backward()
+            cube_losses.backwards()
+
+            total_loss = 0
+            for loss in losses.values():
+                loss["loss"].backward()
+                total_loss += loss["loss"]
+
             self.model_optimizer.step()
             self.model_lr_scheduler.step()
 
@@ -223,7 +224,9 @@ class Trainer:
             late_phase = self.step % 2000 == 0
 
             if early_phase or late_phase:
-                self.log_time(batch_idx, duration, losses["loss"].cpu().data)
+                self.log_time(batch_idx, duration, total_loss.cpu().data)
+
+                #TODO everything here on down needs to use cubemap properly
 
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
@@ -232,6 +235,9 @@ class Trainer:
                 self.val()
 
             self.step += 1
+
+    def compute_cubemap_losses(self, outputs):
+        pass
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
@@ -336,13 +342,16 @@ class Trainer:
             inputs = self.val_iter.next()
 
         with torch.no_grad():
-            outputs, losses = self.process_batch(inputs)
+            for s in list(Side):
+                side_inputs = just_side(s, inputs)
+                outputs, losses = self.process_batch(side_inputs)
 
-            if "depth_gt" in inputs:
-                self.compute_depth_losses(inputs, outputs, losses)
+                if "depth_gt" in side_inputs:
+                    self.compute_depth_losses(side_inputs, outputs, losses)
 
-            self.log("val", inputs, outputs, losses)
-            del inputs, outputs, losses
+                self.log(f"val_{s.name.lower()}", side_inputs, outputs, losses)
+                del outputs, losses
+            del inputs
 
         self.set_train()
 

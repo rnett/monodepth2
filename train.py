@@ -6,6 +6,7 @@
 
 from __future__ import absolute_import, division, print_function
 
+from cubemap_trainer import CubemapTrainer
 from trainer import Trainer
 from options import MonodepthOptions
 
@@ -14,5 +15,8 @@ opts = options.parse()
 
 
 if __name__ == "__main__":
-    trainer = Trainer(opts)
+    if opts.method == "cubemap":
+        trainer = CubemapTrainer(opts)
+    else:
+        trainer = Trainer(opts)
     trainer.train()

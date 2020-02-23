@@ -17,14 +17,21 @@ class MonodepthOptions:
         self.parser = argparse.ArgumentParser(description="Monodepthv2 options")
 
         # PATHS
-        self.parser.add_argument("--data_path",
+        self.parser.add_argument("--train_data",
                                  type=str,
                                  help="path to the training data",
-                                 default=os.path.join(file_dir, "kitti_data"))
+                                 default="train_data.csv")
+        self.parser.add_argument("--val_data",
+                                 type=str,
+                                 help="path to the validation data",
+                                 default="val_data.csv")
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
                                  default=os.path.join(os.path.expanduser("~"), "tmp"))
+
+        self.parser.add_argument("--method", type=str,
+                                 help="Type of model to use: pinhole, cubemap, or cylindrical")
 
         # TRAINING options
         self.parser.add_argument("--model_name",
@@ -41,11 +48,6 @@ class MonodepthOptions:
                                  help="number of resnet layers",
                                  default=18,
                                  choices=[18, 34, 50, 101, 152])
-        self.parser.add_argument("--dataset",
-                                 type=str,
-                                 help="dataset to train on",
-                                 default="kitti",
-                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test"])
         self.parser.add_argument("--png",
                                  help="if set, trains from raw KITTI png files (instead of jpgs)",
                                  action="store_true")

@@ -1,11 +1,13 @@
 import random
-from typing import List
+from typing import List, Callable, Any, Dict
 
+from PIL import Image
 import numpy as np
 import torch
 import torch.utils.data as data
 from PIL import Image  # using pillow-simd for increased speed
-from carla_dataset.data import DataSource
+from carla_dataset.config import Config
+from carla_dataset.data import DataSource, Side, SplitData
 from carla_dataset.intrinsics import Intrinsics
 from torchvision import transforms
 
@@ -25,10 +27,12 @@ class CarlaDataset(data.Dataset):
     """
 
     def __init__(self,
-                 sources: List[DataSource],
+                 configs: List[Config],
+                 get_source: Callable[[Config], DataSource],
                  intrinsics: Intrinsics,
                  frame_idxs,  # 0, 1, -1 sort of thing
                  num_scales,
+                 is_cubemap=False,
                  is_train=False,
                  load_depth=False):
         super(data.Dataset, self).__init__()
@@ -36,11 +40,17 @@ class CarlaDataset(data.Dataset):
         # index -> (source to use, index in source)
         self.sources = []
 
-        for s in sources:
+        self.is_cubemap = is_cubemap
+
+        for c in configs:
+            s: DataSource = get_source(c)
             with s as d:
                 frames = (d.color.shape[0] - 2)
             for j in range(frames):
-                self.sources.append((s, j + 1))
+                if self.is_cubemap:
+                    self.sources.append((c.pinhole_data, j + 1))
+                else:
+                    self.sources.append((s, j + 1))
 
         self.height = intrinsics.height
         self.width = intrinsics.width
@@ -142,9 +152,20 @@ class CarlaDataset(data.Dataset):
         source, frame = self.sources[index]
         with source as d:
             for i in [-1, 0, 1]:
-                inputs[("color", i, -1)] = d.color[frame + i]
+                if self.is_cubemap:
+                    d: SplitData
+                    for s in list(Side):
+                        inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(d[s].color[frame + i], 'RGB')
+                else:
+                    inputs[("color", i, -1)] = Image.fromarray(d.color[frame + i], 'RGB')
 
-            inputs["depth_gt"] = d.depth[frame]
+            if self.load_depth:
+                if self.is_cubemap:
+                    d: SplitData
+                    for s in list(Side):
+                        inputs[f"{s.name.lower()}_depth_gt"] = d[s].depth[frame + i]
+                else:
+                    inputs["depth_gt"] = d.depth[frame]
 
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):
@@ -167,7 +188,18 @@ class CarlaDataset(data.Dataset):
         self.preprocess(inputs, color_aug)
 
         for i in self.frame_idxs:
-            del inputs[("color", i, -1)]
-            del inputs[("color_aug", i, -1)]
+            if self.is_cubemap:
+                for s in list(Side):
+                    del inputs[(f"{s.name.lower()}_color", i, -1)]
+                    del inputs[(f"{s.name.lower()}_color_aug", i, -1)]
+            else:
+                del inputs[("color", i, -1)]
+                del inputs[("color_aug", i, -1)]
 
         return inputs
+
+def just_side(side: Side, inputs: Dict[str, Any]):
+    outs = {}
+    for k in inputs:
+        if k.startswith(side.name.lower()):
+            outs[k[len(side.name)+1:]] = inputs[k]
