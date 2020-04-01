@@ -106,6 +106,7 @@ def rot_from_axisangle(vec):
 class ConvBlock(nn.Module):
     """Layer to perform a convolution followed by ELU
     """
+
     def __init__(self, conv_layer, in_channels, out_channels):
         super(ConvBlock, self).__init__()
 
@@ -121,6 +122,7 @@ class ConvBlock(nn.Module):
 class Conv3x3(nn.Module):
     """Layer to pad and convolve input
     """
+
     def __init__(self, conv_layer, in_channels, out_channels, use_refl=True):
         super(Conv3x3, self).__init__()
 
@@ -139,15 +141,18 @@ class Conv3x3(nn.Module):
 class BackprojectDepth(nn.Module):
     """Layer to transform a depth image into a point cloud
     """
-    def __init__(self, batch_size, height, width):
+
+    def __init__(self, batch_size, height, width, cylindrical):
         super(BackprojectDepth, self).__init__()
 
         self.batch_size = batch_size
         self.height = height
         self.width = width
+        self.cylindrical = cylindrical
 
         meshgrid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
         self.id_coords = np.stack(meshgrid, axis=0).astype(np.float32)
+
         self.id_coords = nn.Parameter(torch.from_numpy(self.id_coords),
                                       requires_grad=False)
 
@@ -162,34 +167,65 @@ class BackprojectDepth(nn.Module):
 
     def forward(self, depth, inv_K):
         cam_points = torch.matmul(inv_K[:, :3, :3], self.pix_coords)
-        cam_points = depth.view(self.batch_size, 1, -1) * cam_points
+
+        if self.cylindrical:
+            X = torch.sin(cam_points[:, 0:1, :])
+            Y = cam_points[:, 1:2, :]
+            Z = torch.cos(cam_points[:, 0:1, :])
+            cam_points = torch.cat([X, Y, Z], dim=1) * depth.view(self.batch_size, 1, -1)
+        else:
+            cam_points = depth.view(self.batch_size, 1, -1) * cam_points
+
         cam_points = torch.cat([cam_points, self.ones], 1)
 
         return cam_points
 
 
+# https://github.com/jonathanventura/cylindricalsfmlearner/blob/cfb4ddb6d39e115a3e9c5eafc04f5736cb7ece7d/utils.py#L96
 class Project3D(nn.Module):
     """Layer which projects 3D points into a camera with intrinsics K and at position T
     """
-    def __init__(self, batch_size, height, width, eps=1e-7):
+
+    def __init__(self, batch_size, height, width, cylindrical, eps=1e-7):
         super(Project3D, self).__init__()
 
         self.batch_size = batch_size
         self.height = height
         self.width = width
         self.eps = eps
+        self.cylindrical = cylindrical
 
-    def forward(self, points, K, T):
-        P = torch.matmul(K, T)[:, :3, :]
+        self.ones = nn.Parameter(torch.ones(self.batch_size, 1, self.height * self.width),
+                                 requires_grad=False)
+
+    def forward(self, points, K, T, invK):
+        P = T[:, :3, :]
 
         cam_points = torch.matmul(P, points)
 
-        pix_coords = cam_points[:, :2, :] / (cam_points[:, 2, :].unsqueeze(1) + self.eps)
+        if self.cylindrical:
+            X = cam_points[:, 0:1, :]
+            Y = cam_points[:, 1:2, :]
+            Z = cam_points[:, 2:3, :]
+
+            h = Y / (torch.sqrt(X*X + Z*Z) + self.eps)
+            theta = torch.atan2(X, Z)
+            pix_coords = torch.cat([theta, h], dim=1)
+        else:
+            pix_coords = cam_points[:, :2, :] / (cam_points[:, 2, :].unsqueeze(1) + self.eps)
+
+        pix_coords = torch.cat([pix_coords, self.ones], dim=1)
+        pix_coords = torch.matmul(K[:, :3, :3], pix_coords)
+        pix_coords = pix_coords[:, :2, :]
+
         pix_coords = pix_coords.view(self.batch_size, 2, self.height, self.width)
         pix_coords = pix_coords.permute(0, 2, 3, 1)
+
+        # change from a 0-width range to a -1-1 range.
         pix_coords[..., 0] /= self.width - 1
         pix_coords[..., 1] /= self.height - 1
         pix_coords = (pix_coords - 0.5) * 2
+
         return pix_coords
 
 
@@ -218,12 +254,13 @@ def get_smooth_loss(disp, img):
 class SSIM(nn.Module):
     """Layer to compute the SSIM loss between a pair of images
     """
+
     def __init__(self):
         super(SSIM, self).__init__()
-        self.mu_x_pool   = nn.AvgPool2d(3, 1)
-        self.mu_y_pool   = nn.AvgPool2d(3, 1)
-        self.sig_x_pool  = nn.AvgPool2d(3, 1)
-        self.sig_y_pool  = nn.AvgPool2d(3, 1)
+        self.mu_x_pool = nn.AvgPool2d(3, 1)
+        self.mu_y_pool = nn.AvgPool2d(3, 1)
+        self.sig_x_pool = nn.AvgPool2d(3, 1)
+        self.sig_y_pool = nn.AvgPool2d(3, 1)
         self.sig_xy_pool = nn.AvgPool2d(3, 1)
 
         self.refl = nn.ReflectionPad2d(1)
@@ -238,8 +275,8 @@ class SSIM(nn.Module):
         mu_x = self.mu_x_pool(x)
         mu_y = self.mu_y_pool(y)
 
-        sigma_x  = self.sig_x_pool(x ** 2) - mu_x ** 2
-        sigma_y  = self.sig_y_pool(y ** 2) - mu_y ** 2
+        sigma_x = self.sig_x_pool(x ** 2) - mu_x ** 2
+        sigma_y = self.sig_y_pool(y ** 2) - mu_y ** 2
         sigma_xy = self.sig_xy_pool(x * y) - mu_x * mu_y
 
         SSIM_n = (2 * mu_x * mu_y + self.C1) * (2 * sigma_xy + self.C2)
@@ -252,7 +289,7 @@ def compute_depth_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
     """
     thresh = torch.max((gt / pred), (pred / gt))
-    a1 = (thresh < 1.25     ).float().mean()
+    a1 = (thresh < 1.25).float().mean()
     a2 = (thresh < 1.25 ** 2).float().mean()
     a3 = (thresh < 1.25 ** 3).float().mean()
 

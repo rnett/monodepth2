@@ -6,6 +6,8 @@
 
 from __future__ import absolute_import, division, print_function
 
+from pathlib import Path
+
 import carla_dataset
 import numpy as np
 import time
@@ -15,6 +17,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from carla_dataset.config import load_csv, Config
 from carla_dataset.intrinsics import PinholeIntrinsics, CylindricalIntrinsics
+from imageio import imwrite
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 
@@ -35,7 +38,7 @@ def get_pinhole_front(r: Config):
     return r.pinhole_data.front
 
 def get_cylindrical(r: Config):
-    return r.cylendrical_data
+    return r.cylindrical_data
 
 class Trainer:
     def __init__(self, options):
@@ -50,6 +53,8 @@ class Trainer:
         self.parameters_to_train = []
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.parallel = not self.opt.no_cuda and torch.cuda.device_count() > 1
+
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -62,24 +67,16 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
-        if options.method == "cylindrical":
-            conv_layer = CylindricalConv2d
-            data_lambda = get_cylindrical
-            intrinsics = CylindricalIntrinsics()
-        else:
-            conv_layer = nn.Conv2d
-            data_lambda = get_pinhole_front
-            intrinsics = PinholeIntrinsics()
+        conv_layer, data_lambda, intrinsics = self.get_params(options)
+        self.intrinsics = intrinsics
 
         self.models["encoder"] = networks.ResnetEncoder(conv_layer,
             self.opt.num_layers, self.opt.weights_init == "pretrained")
-        self.models["encoder"].to(self.device)
-        self.parameters_to_train += list(self.models["encoder"].parameters())
+        self.store_model("encoder")
 
         self.models["depth"] = networks.DepthDecoder(conv_layer,
-            self.models["encoder"].num_ch_enc, self.opt.scales)
-        self.models["depth"].to(self.device)
-        self.parameters_to_train += list(self.models["depth"].parameters())
+            self.get_num_ch_enc(self.models["encoder"]), self.opt.scales)
+        self.store_model("depth")
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
@@ -87,25 +84,24 @@ class Trainer:
                     self.opt.num_layers,
                     self.opt.weights_init == "pretrained",
                     num_input_images=self.num_pose_frames)
+                self.store_model("pose_encoder")
 
                 self.models["pose_encoder"].to(self.device)
-                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
 
                 self.models["pose"] = networks.PoseDecoder(conv_layer,
-                    self.models["pose_encoder"].num_ch_enc,
+                    self.get_num_ch_enc(self.models["pose_encoder"]),
                     num_input_features=1,
                     num_frames_to_predict_for=2)
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(conv_layer,
-                    self.models["encoder"].num_ch_enc, self.num_pose_frames)
+                    self.get_num_ch_enc(self.models["encoder"]), self.num_pose_frames)
 
             elif self.opt.pose_model_type == "posecnn":
                 self.models["pose"] = networks.PoseCNN(conv_layer,
                     self.num_input_frames if self.opt.pose_model_input == "all" else 2)
 
-            self.models["pose"].to(self.device)
-            self.parameters_to_train += list(self.models["pose"].parameters())
+            self.store_model("pose")
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -114,10 +110,10 @@ class Trainer:
             # Our implementation of the predictive masking baseline has the the same architecture
             # as our depth decoder. We predict a separate mask for each source frame.
             self.models["predictive_mask"] = networks.DepthDecoder(conv_layer,
-                self.models["encoder"].num_ch_enc, self.opt.scales,
+                self.get_num_ch_enc(self.models["encoder"]), self.opt.scales,
                 num_output_channels=(len(self.opt.frame_ids) - 1))
-            self.models["predictive_mask"].to(self.device)
-            self.parameters_to_train += list(self.models["predictive_mask"].parameters())
+            self.store_model("predictive_mask")
+
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
@@ -128,19 +124,16 @@ class Trainer:
 
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
-        print("Training is using:\n  ", self.device)
+        print("Training is using:\n  ", f"{self.device}" + (f" on {torch.cuda.device_count()} GPUs" if self.parallel else ""))
 
         num_train_samples = len(load_csv(options.train_data)) * 1000
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
-        train_dataset = CarlaDataset(load_csv(options.train_data), data_lambda, intrinsics,
-            self.opt.frame_ids, 4, is_train=True)
+        train_dataset, val_dataset = self.get_datasets(options, data_lambda, intrinsics)
+
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
-
-        val_dataset = CarlaDataset(load_csv(options.val_data), data_lambda, intrinsics,
-            self.opt.frame_ids, 4, is_train=True)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
@@ -151,7 +144,7 @@ class Trainer:
             self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
 
         if not self.opt.no_ssim:
-            self.ssim = SSIM()
+            self.ssim = self.wrap_model(SSIM()) #TODO can I parallelize?
             self.ssim.to(self.device)
 
         self.backproject_depth = {}
@@ -160,10 +153,10 @@ class Trainer:
             h = intrinsics.height // (2 ** scale)
             w = intrinsics.width // (2 ** scale)
 
-            self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w)
+            self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w, options.method == "cylindrical")
             self.backproject_depth[scale].to(self.device)
 
-            self.project_3d[scale] = Project3D(self.opt.batch_size, h, w)
+            self.project_3d[scale] = Project3D(self.opt.batch_size, h, w, options.method == "cylindrical")
             self.project_3d[scale].to(self.device)
 
         self.depth_metric_names = [
@@ -174,6 +167,40 @@ class Trainer:
             len(train_dataset), len(val_dataset)))
 
         self.save_opts()
+
+    def store_model(self, name):
+        if self.parallel:
+            self.models[name] = nn.DataParallel(self.models[name])
+
+        self.models[name].to(self.device)
+        self.parameters_to_train += list(self.models[name].parameters())
+
+    def wrap_model(self, model):
+        if self.parallel:
+            return nn.DataParallel(model)
+        else:
+            return model
+
+    def get_num_ch_enc(self, model):
+        if isinstance(model, nn.DataParallel):
+            return model.module.num_ch_enc
+        else:
+            return model.num_ch_enc
+
+    def get_params(self, options):
+        if options.method == "cylindrical":
+            return CylindricalConv2d, get_cylindrical, CylindricalIntrinsics()
+        else:
+            return nn.Conv2d, get_pinhole_front, PinholeIntrinsics()
+
+    def get_datasets(self, options, data_lambda, intrinsics):
+        train_dataset = CarlaDataset(load_csv(options.train_data), data_lambda, intrinsics,
+                                     self.opt.frame_ids, 4, is_train=True)
+
+        val_dataset = CarlaDataset(load_csv(options.val_data), data_lambda, intrinsics,
+                                   self.opt.frame_ids, 4, is_train=True)
+
+        return train_dataset, val_dataset
 
     def set_train(self):
         """Convert all models to training mode
@@ -356,7 +383,7 @@ class Trainer:
                 source_scale = scale
             else:
                 disp = F.interpolate(
-                    disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                    disp, [self.intrinsics.height, self.intrinsics.width], mode="bilinear", align_corners=False)
                 source_scale = 0
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
@@ -385,14 +412,14 @@ class Trainer:
                 cam_points = self.backproject_depth[source_scale](
                     depth, inputs[("inv_K", source_scale)])
                 pix_coords = self.project_3d[source_scale](
-                    cam_points, inputs[("K", source_scale)], T)
+                    cam_points, inputs[("K", source_scale)], T, inputs[("inv_K", source_scale)])
 
                 outputs[("sample", frame_id, scale)] = pix_coords
 
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample", frame_id, scale)],
-                    padding_mode="border")
+                    align_corners=True, padding_mode="border")
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
@@ -433,6 +460,17 @@ class Trainer:
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
+
+                dir = Path(f"~/epoch_{self.epoch}/scale_{scale}/frame_{frame_id + 1}/").expanduser()
+
+                dir.mkdir(parents=True, exist_ok=True)
+
+                for i in range(pred.shape[0]):
+                    p = pred[i, ...].permute(1, 2, 0)
+                    t = target[i, ...].permute(1, 2, 0)
+                    imwrite(dir / f"pred_{i}.png", p.cpu().detach())
+                    imwrite(dir / f"target_{i}.png", t.cpu().detach())
+
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
@@ -457,13 +495,13 @@ class Trainer:
                 mask = outputs["predictive_mask"]["disp", scale]
                 if not self.opt.v1_multiscale:
                     mask = F.interpolate(
-                        mask, [self.opt.height, self.opt.width],
+                        mask, [self.intrinsics.height, self.intrinsics.width],
                         mode="bilinear", align_corners=False)
 
                 reprojection_losses *= mask
 
                 # add a loss pushing mask to 1 (using nn.BCELoss for stability)
-                weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
+                weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).to(self.device))
                 loss += weighting_loss.mean()
 
             if self.opt.avg_reprojection:
@@ -474,7 +512,7 @@ class Trainer:
             if not self.opt.disable_automasking:
                 # add random numbers to break ties
                 identity_reprojection_loss += torch.randn(
-                    identity_reprojection_loss.shape).cuda() * 0.00001
+                    identity_reprojection_loss.shape).to(self.device) * 0.00001
 
                 combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
             else:
@@ -602,8 +640,8 @@ class Trainer:
             to_save = model.state_dict()
             if model_name == 'encoder':
                 # save the sizes - these are needed at prediction time
-                to_save['height'] = self.opt.height
-                to_save['width'] = self.opt.width
+                to_save['height'] = self.intrinsics.height
+                to_save['width'] = self.intrinsics.width
                 to_save['use_stereo'] = self.opt.use_stereo
             torch.save(to_save, save_path)
 

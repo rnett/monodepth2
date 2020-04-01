@@ -29,25 +29,31 @@ class DepthDecoder(nn.Module):
         self.num_ch_dec = np.array([16, 32, 64, 128, 256])
 
         # decoder
-        self.convs = OrderedDict()
+        convs = OrderedDict()
         for i in range(4, -1, -1):
             # upconv_0
             num_ch_in = self.num_ch_enc[-1] if i == 4 else self.num_ch_dec[i + 1]
             num_ch_out = self.num_ch_dec[i]
-            self.convs[("upconv", i, 0)] = ConvBlock(conv_layer, num_ch_in, num_ch_out)
+            convs[("upconv", i, 0)] = ConvBlock(conv_layer, num_ch_in, num_ch_out)
 
             # upconv_1
             num_ch_in = self.num_ch_dec[i]
             if self.use_skips and i > 0:
                 num_ch_in += self.num_ch_enc[i - 1]
             num_ch_out = self.num_ch_dec[i]
-            self.convs[("upconv", i, 1)] = ConvBlock(conv_layer, num_ch_in, num_ch_out)
+            convs[("upconv", i, 1)] = ConvBlock(conv_layer, num_ch_in, num_ch_out)
 
         for s in self.scales:
-            self.convs[("dispconv", s)] = Conv3x3(conv_layer, self.num_ch_dec[s], self.num_output_channels)
+            convs[("dispconv", s)] = Conv3x3(conv_layer, self.num_ch_dec[s], self.num_output_channels)
 
-        self.decoder = nn.ModuleList(list(self.convs.values()))
+        for key, module in convs.items():
+            super(DepthDecoder, self).add_module("_".join([str(k) for k in key]), module)
+
+        # self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
+
+    def get_conv(self, *args):
+        return self.__getattr__("_".join([str(k) for k in args]))
 
     def forward(self, input_features):
         self.outputs = {}
@@ -55,13 +61,13 @@ class DepthDecoder(nn.Module):
         # decoder
         x = input_features[-1]
         for i in range(4, -1, -1):
-            x = self.convs[("upconv", i, 0)](x)
+            x = self.get_conv("upconv", i, 0)(x)
             x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
             x = torch.cat(x, 1)
-            x = self.convs[("upconv", i, 1)](x)
+            x = self.get_conv("upconv", i, 1)(x)
             if i in self.scales:
-                self.outputs[("disp", i)] = self.sigmoid(self.convs[("dispconv", i)](x))
+                self.outputs[("disp", i)] = self.sigmoid(self.get_conv("dispconv", i)(x))
 
         return self.outputs

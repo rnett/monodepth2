@@ -31,6 +31,7 @@ class MonodepthOptions:
                                  default=os.path.join(os.path.expanduser("~"), "tmp"))
 
         self.parser.add_argument("--method", type=str,
+                                 default='pinhole',
                                  help="Type of model to use: pinhole, cubemap, or cylindrical")
 
         # TRAINING options

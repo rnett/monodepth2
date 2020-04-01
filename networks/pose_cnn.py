@@ -18,27 +18,24 @@ class PoseCNN(nn.Module):
 
         self.num_input_frames = num_input_frames
 
-        self.convs = {}
-        self.convs[0] = conv_layer(3 * num_input_frames, 16, 7, 2, 3)
-        self.convs[1] = conv_layer(16, 32, 5, 2, 2)
-        self.convs[2] = conv_layer(32, 64, 3, 2, 1)
-        self.convs[3] = conv_layer(64, 128, 3, 2, 1)
-        self.convs[4] = conv_layer(128, 256, 3, 2, 1)
-        self.convs[5] = conv_layer(256, 256, 3, 2, 1)
-        self.convs[6] = conv_layer(256, 256, 3, 2, 1)
+        self.conv_0 = conv_layer(3 * num_input_frames, 16, 7, 2, 3)
+        self.conv_1 = conv_layer(16, 32, 5, 2, 2)
+        self.conv_2 = conv_layer(32, 64, 3, 2, 1)
+        self.conv_3 = conv_layer(64, 128, 3, 2, 1)
+        self.conv_4 = conv_layer(128, 256, 3, 2, 1)
+        self.conv_5 = conv_layer(256, 256, 3, 2, 1)
+        self.conv_6 = conv_layer(256, 256, 3, 2, 1)
 
         self.pose_conv = conv_layer(256, 6 * (num_input_frames - 1), 1)
 
-        self.num_convs = len(self.convs)
+        self.num_convs = 7
 
         self.relu = nn.ReLU(True)
-
-        self.net = nn.ModuleList(list(self.convs.values()))
 
     def forward(self, out):
 
         for i in range(self.num_convs):
-            out = self.convs[i](out)
+            out = self.__getattr__(f"conv_{i}")(out)
             out = self.relu(out)
 
         out = self.pose_conv(out)
