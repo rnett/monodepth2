@@ -8,13 +8,11 @@ from torch import nn
 
 class CylindricalConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
-                 padding_mode='zeros'):
+                 padding_mode='cylindrical'):
         super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.padding_mode == "cylindrical":
-            height = input.shape[1]
-            width = input.shape[2]
             wrap_padding = [k-1 for k in self.kernel_size]
             wrapped_inputs = wrap_pad(input, wrap_padding)
             return super().forward(wrapped_inputs)
@@ -24,8 +22,7 @@ class CylindricalConv2d(nn.Conv2d):
 
 
 
-
-def wrap_pad(tensor: torch.Tensor, wrap_padding, axis=(1, 2)):
+def wrap_pad(tensor: torch.Tensor, wrap_padding, axis=(2, 3)):
     """Apply cylindrical wrapping to one axis and zero padding to another.
     By default, this wraps horizontally and pads vertically. The axes can be
     set with the `axis` keyword, and the wrapping/padding amount can be set
