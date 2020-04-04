@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from carla_dataset.config import load_csv, Config
-from carla_dataset.intrinsics import PinholeIntrinsics, CylindricalIntrinsics
+from carla_dataset.intrinsics import Pinhole90Intrinsics, PinholeIntrinsics, CylindricalIntrinsics
 from imageio import imwrite
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
@@ -24,7 +24,9 @@ from tensorboardX import SummaryWriter
 import json
 
 from datasets.carla_dataset import CarlaDataset
+from networks.cube_padding import CubicConv2d
 from networks.cylindrical_padding import CylindricalConv2d
+from options import Mode
 from utils import *
 from kitti_utils import *
 from layers import *
@@ -153,10 +155,11 @@ class Trainer:
             h = intrinsics.height // (2 ** scale)
             w = intrinsics.width // (2 ** scale)
 
-            self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w, options.method == "cylindrical")
+            #TODO should be able to paralalize
+            self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w, options.mode)
             self.backproject_depth[scale].to(self.device)
 
-            self.project_3d[scale] = Project3D(self.opt.batch_size, h, w, options.method == "cylindrical")
+            self.project_3d[scale] = Project3D(self.opt.batch_size, h, w, options.mode)
             self.project_3d[scale].to(self.device)
 
         self.depth_metric_names = [
@@ -188,17 +191,19 @@ class Trainer:
             return model.num_ch_enc
 
     def get_params(self, options):
-        if options.method == "cylindrical":
+        if options.mode is Mode.Cylindrical:
             return CylindricalConv2d, get_cylindrical, CylindricalIntrinsics()
+        elif options.mode is Mode.Cubemap:
+            return CubicConv2d, get_pinhole_front, Pinhole90Intrinsics()
         else:
             return nn.Conv2d, get_pinhole_front, PinholeIntrinsics()
 
     def get_datasets(self, options, data_lambda, intrinsics):
         train_dataset = CarlaDataset(load_csv(options.train_data), data_lambda, intrinsics,
-                                     self.opt.frame_ids, 4, is_train=True)
+                                     self.opt.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap)
 
         val_dataset = CarlaDataset(load_csv(options.val_data), data_lambda, intrinsics,
-                                   self.opt.frame_ids, 4, is_train=True)
+                                   self.opt.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap)
 
         return train_dataset, val_dataset
 
@@ -412,7 +417,7 @@ class Trainer:
                 cam_points = self.backproject_depth[source_scale](
                     depth, inputs[("inv_K", source_scale)])
                 pix_coords = self.project_3d[source_scale](
-                    cam_points, inputs[("K", source_scale)], T, inputs[("inv_K", source_scale)])
+                    cam_points, inputs[("K", source_scale)], T)
 
                 outputs[("sample", frame_id, scale)] = pix_coords
 

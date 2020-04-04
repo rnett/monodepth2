@@ -12,6 +12,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from options import Mode
+
 
 def disp_to_depth(disp, min_depth, max_depth):
     """Convert network's sigmoid output into depth prediction
@@ -137,18 +139,18 @@ class Conv3x3(nn.Module):
         out = self.conv(out)
         return out
 
-
+#TODO concatenage all images/methgrids, sample from concatenated images like in preprocessing?
 class BackprojectDepth(nn.Module):
     """Layer to transform a depth image into a point cloud
     """
 
-    def __init__(self, batch_size, height, width, cylindrical):
+    def __init__(self, batch_size, height, width, mode: Mode):
         super(BackprojectDepth, self).__init__()
 
         self.batch_size = batch_size
         self.height = height
         self.width = width
-        self.cylindrical = cylindrical
+        self.mode = mode
 
         meshgrid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
         self.id_coords = np.stack(meshgrid, axis=0).astype(np.float32)
@@ -168,7 +170,7 @@ class BackprojectDepth(nn.Module):
     def forward(self, depth, inv_K):
         cam_points = torch.matmul(inv_K[:, :3, :3], self.pix_coords)
 
-        if self.cylindrical:
+        if self.mode is Mode.Cylindrical:
             X = torch.sin(cam_points[:, 0:1, :])
             Y = cam_points[:, 1:2, :]
             Z = torch.cos(cam_points[:, 0:1, :])
@@ -181,29 +183,28 @@ class BackprojectDepth(nn.Module):
         return cam_points
 
 
-# https://github.com/jonathanventura/cylindricalsfmlearner/blob/cfb4ddb6d39e115a3e9c5eafc04f5736cb7ece7d/utils.py#L96
 class Project3D(nn.Module):
     """Layer which projects 3D points into a camera with intrinsics K and at position T
     """
 
-    def __init__(self, batch_size, height, width, cylindrical, eps=1e-7):
+    def __init__(self, batch_size, height, width, mode: Mode, eps=1e-7):
         super(Project3D, self).__init__()
 
         self.batch_size = batch_size
         self.height = height
         self.width = width
         self.eps = eps
-        self.cylindrical = cylindrical
+        self.mode = mode
 
         self.ones = nn.Parameter(torch.ones(self.batch_size, 1, self.height * self.width),
                                  requires_grad=False)
 
-    def forward(self, points, K, T, invK):
+    def forward(self, points, K, T):
         P = T[:, :3, :]
 
         cam_points = torch.matmul(P, points)
 
-        if self.cylindrical:
+        if self.mode is Mode.Cylindrical:
             X = cam_points[:, 0:1, :]
             Y = cam_points[:, 1:2, :]
             Z = cam_points[:, 2:3, :]

@@ -1,10 +1,15 @@
 from __future__ import annotations
+
 from typing import Tuple, Union
 
+import carla_dataset
+import cv2
 import numpy as np
 import torch
+from imageio import imread
+from matplotlib.pyplot import imshow
+import matplotlib.pyplot as plt
 from torch import Tensor, nn
-from torch.nn import Parameter
 
 
 def sides_from_batch(x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
@@ -19,15 +24,21 @@ def sides_from_batch(x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor,
             f"{'' if torch.cuda.device_count() <= 1 else '  Ensure that the batch on each GPU is a multiple of 6.'}")
 
     shape = list(x.shape)
-    shape[0] /= 6
-    shape.insert(0, 6)
+    shape[0] //= 6
+    shape.insert(1, 6)
 
-    x = x.reshape(shape)
+    x = x.reshape(shape).transpose(0, 1)
     return x[0], x[1], x[2], x[3], x[4], x[5]
 
 
 def sides_to_batch(top: Tensor, bottom: Tensor, left: Tensor, right: Tensor, front: Tensor, back: Tensor) -> Tensor:
-    return torch.stack([top, bottom, left, right, front, back], dim=0)
+    assert top.shape == bottom.shape and top.shape == left.shape and top.shape == right.shape and top.shape == \
+           front.shape and top.shape == back.shape
+
+    shape = list(top.shape)
+    shape[0] *= 6
+
+    return torch.stack([top, bottom, left, right, front, back], dim=0).transpose(0, 1).reshape(shape)
 
 
 class Side:
@@ -35,13 +46,13 @@ class Side:
         self.x = x
 
     def rot90(self) -> Side:
-        return Side(self.x.transpose(2, 3))
+        return Side(self.x.transpose(2, 3).flip(3))
 
     def rotNeg90(self) -> Side:
-        return Side(self.x.transpose(2, 3).flip(3))  # should it be flip(1, 2)?
+        return Side(self.x.transpose(2, 3).flip(2))  # should it be flip(2, 3)?  Docs said just 3
 
     def flipVertical(self) -> Side:
-        return Side(self.x.flip(1))
+        return Side(self.x.flip(2))
 
     def flipHorizontal(self) -> Side:
         return Side(self.x.flip(3))
@@ -53,10 +64,10 @@ class Side:
         return Side(self.x[:, :, :, -size:])
 
     def top_strip(self, size) -> Side:
-        return Side(self.x[:, :, :, :size])
+        return Side(self.x[:, :, :size, :])
 
     def bottom_strip(self, size) -> Side:
-        return Side(self.x[:, :, :, -size:])
+        return Side(self.x[:, :, -size:, :])
 
 
 def pad_side(x: Union[Side, Tensor], top_strip: Union[Side, Tensor], bottom_strip: Union[Side, Tensor],
@@ -69,30 +80,30 @@ def pad_side(x: Union[Side, Tensor], top_strip: Union[Side, Tensor], bottom_stri
         bottom_strip = bottom_strip.x
     if isinstance(left_strip, Side):
         left_strip = left_strip.x
-    if isinstance(x, Side):
+    if isinstance(right_strip, Side):
         right_strip = right_strip.x
 
     vertical = torch.cat([top_strip, x, bottom_strip], dim=2)
 
-    if top_strip.shape[1] >= left_strip.shape[2]:
-        top_left_corner = top_strip[:, :, :, 0:1].repeat(1, 1, 1, left_strip.shape[2])
+    if top_strip.shape[2] >= left_strip.shape[3]:
+        top_left_corner = top_strip[:, :, :, 0:1].repeat(1, 1, 1, left_strip.shape[3])
     else:
-        top_left_corner = left_strip[:, :, 0:1, :].repeat(1, 1, top_strip.shape[1], 1)
+        top_left_corner = left_strip[:, :, 0:1, :].repeat(1, 1, top_strip.shape[2], 1)
 
-    if bottom_strip.shape[1] >= left_strip.shape[2]:
-        bottom_left_corner = bottom_strip[:, :, :, 0:1].repeat(1, 1, 1, left_strip.shape[2])
+    if bottom_strip.shape[2] >= left_strip.shape[3]:
+        bottom_left_corner = bottom_strip[:, :, :, 0:1].repeat(1, 1, 1, left_strip.shape[3])
     else:
-        bottom_left_corner = left_strip[:, :, -1:, :].repeat(1, 1, bottom_strip.shape[1], 1)
+        bottom_left_corner = left_strip[:, :, -1:, :].repeat(1, 1, bottom_strip.shape[2], 1)
 
-    if top_strip.shape[1] >= right_strip.shape[2]:
-        top_right_corner = top_strip[:, :, :, -1:].repeat(1, 1, 1, right_strip.shape[2])
+    if top_strip.shape[2] >= right_strip.shape[3]:
+        top_right_corner = top_strip[:, :, :, -1:].repeat(1, 1, 1, right_strip.shape[3])
     else:
-        top_right_corner = right_strip[:, :, 0:1, :].repeat(1, 1, top_strip.shape[1], 1)
+        top_right_corner = right_strip[:, :, 0:1, :].repeat(1, 1, top_strip.shape[2], 1)
 
-    if bottom_strip.shape[1] >= right_strip.shape[2]:
-        bottom_right_corner = bottom_strip[:, :, :, -1:].repeat(1, 1, 1, right_strip.shape[2])
+    if bottom_strip.shape[2] >= right_strip.shape[3]:
+        bottom_right_corner = bottom_strip[:, :, :, -1:].repeat(1, 1, 1, right_strip.shape[3])
     else:
-        bottom_right_corner = right_strip[:, :, -1:, :].repeat(1, 1, bottom_strip.shape[1], 1)
+        bottom_right_corner = right_strip[:, :, -1:, :].repeat(1, 1, bottom_strip.shape[2], 1)
 
     full_right = torch.cat([top_right_corner, right_strip, bottom_right_corner], dim=2)
     full_left = torch.cat([top_left_corner, left_strip, bottom_left_corner], dim=2)
@@ -127,7 +138,7 @@ def cube_pad(x: Tensor, pad_size) -> Tensor:
     return sides_to_batch(padded_top, padded_bottom, padded_left, padded_right, padded_front, padded_back)
 
 
-class CubicConv2D(nn.Conv2d):
+class CubicConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
                  padding_mode='cubic'):
         super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
@@ -148,3 +159,34 @@ def get_pad_size(lrtd_pad):
     else:
         [p_l, p_r, p_t, p_d] = lrtd_pad
     return p_l, p_r, p_t, p_d
+
+if __name__ == '__main__':
+    sides = ['top', 'bottom', 'left', 'right', 'front', 'back']
+    batch = []
+    for i in range(10):
+        all_sides = []
+        for s in sides:
+            img = imread(f"E:\\carla\\town01\\clear\\noon\\cars_30_peds_200_index_0\\raw\\frames\\{s}_{i}_rgb.png")[..., :3]
+
+            img = carla_dataset.data.crop_pinhole_to_90(img)
+            # plt.imshow(img)
+            # plt.show()
+            all_sides.append(img)
+
+        batch.append(np.stack(all_sides, axis=0))
+
+    batch = torch.from_numpy(np.concatenate(batch, axis=0)).permute(0, 3, 1, 2)
+
+    # s = Side(batch)
+    # r = s.flipHorizontal()
+
+    padded = cube_pad(batch, 30)
+
+    # together = torch.cat([s.x, r.x], dim=3)
+
+    for image in padded:
+        plt.imshow(image.permute(1, 2, 0).numpy())
+        plt.show()
+        print()
+
+    print()

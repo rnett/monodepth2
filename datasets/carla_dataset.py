@@ -7,7 +7,7 @@ import torch
 import torch.utils.data as data
 from PIL import Image  # using pillow-simd for increased speed
 from carla_dataset.config import Config
-from carla_dataset.data import DataSource, Side, SplitData
+from carla_dataset.data import DataSource, Side, SplitData, crop_pinhole_to_90
 from carla_dataset.intrinsics import Intrinsics
 from torchvision import transforms
 
@@ -154,7 +154,7 @@ class CarlaDataset(data.Dataset):
                 if self.is_cubemap:
                     d: SplitData
                     for s in list(Side):
-                        inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(d[s].color[frame + i], 'RGB')
+                        inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(crop_pinhole_to_90(d[s].color[frame + i]), 'RGB')
                 else:
                     inputs[("color", i, -1)] = Image.fromarray(d.color[frame + i], 'RGB')
 

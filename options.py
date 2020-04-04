@@ -8,9 +8,14 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import argparse
+from enum import Enum
 
 file_dir = os.path.dirname(__file__)  # the directory that options.py resides in
 
+class Mode(Enum):
+    Pinhole = 'pinhole'
+    Cylindrical = 'cylindrical'
+    Cubemap = 'cubmap'
 
 class MonodepthOptions:
     def __init__(self):
@@ -30,7 +35,7 @@ class MonodepthOptions:
                                  help="log directory",
                                  default=os.path.join(os.path.expanduser("~"), "tmp"))
 
-        self.parser.add_argument("--method", type=str,
+        self.parser.add_argument("--mode", type=str,
                                  default='pinhole',
                                  help="Type of model to use: pinhole, cubemap, or cylindrical")
 
@@ -208,4 +213,14 @@ class MonodepthOptions:
 
     def parse(self):
         self.options = self.parser.parse_args()
+
+        if self.options.mode == 'pinhole':
+            self.options.mode = Mode.Pinhole
+        elif self.options.mode == 'cylindrical':
+            self.options.mode = Mode.Cylindrical
+        elif self.options.mode == 'cubemap':
+            self.options.mode = Mode.Cubemap
+        else:
+            raise ValueError(f"Mode ${self.options.mode} not recognized: must be one of pinhole, cylindrical, or cubemap")
+
         return self.options
