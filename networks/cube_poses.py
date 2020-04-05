@@ -28,7 +28,8 @@ class CubePosesAndLoss(nn.Module):
         self.back_R = nn.Parameter(rotation_matrix(0, np.pi / 2, 0).T, requires_grad=False) #TODO do I need to flip X?
         self.filler = nn.Parameter(torch.from_numpy(np.array([0, 0, 0, 1], dtype='float32')), requires_grad=False)
 
-        # transofrm from P2 to P1: P1^T @ P2 @ P1
+        # transofrm from P2 to P1 according to stackoverflow: P1^T @ P2 @ P1
+        # unclear answer though
 
     def forward(self, T: Tensor) -> (Tensor, Tensor):
         T = T[:, :3, :]
