@@ -86,8 +86,6 @@ class CarlaDataset(data.Dataset):
 
         self.K = intrinsics.normalized_K
 
-        # TODO set K (intrinsics)
-
     def preprocess(self, inputs, color_aug):
         """Resize colour images to the required scales and augment if required
 
@@ -96,14 +94,14 @@ class CarlaDataset(data.Dataset):
         same augmentation.
         """
         for k in list(inputs):
-            if "color" in k:
+            if "color" in k or "color" in k[0]:
                 n, im, i = k
                 for i in range(self.num_scales):
                     inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
 
         for k in list(inputs):
             f = inputs[k]
-            if "color" in k:
+            if "color" in k or "color" in k[0]:
                 n, im, i = k
                 inputs[(n, im, i)] = self.to_tensor(f)
                 inputs[(n + "_aug", im, i)] = self.to_tensor(color_aug(f))
@@ -150,7 +148,7 @@ class CarlaDataset(data.Dataset):
 
         source, frame = self.sources[index]
         with source as d:
-            for i in [-1, 0, 1]:
+            for i in self.frame_idxs:
                 if self.is_cubemap:
                     d: SplitData
                     for s in list(Side):

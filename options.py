@@ -12,7 +12,7 @@ from enum import Enum
 
 file_dir = os.path.dirname(__file__)  # the directory that options.py resides in
 
-class Mode(Enum):
+class Mode(str, Enum):
     Pinhole = 'pinhole'
     Cylindrical = 'cylindrical'
     Cubemap = 'cubmap'

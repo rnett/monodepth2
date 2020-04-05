@@ -10,12 +10,14 @@ from pathlib import Path
 
 import carla_dataset
 import numpy as np
+import matplotlib.pyplot as plt
 import time
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from carla_dataset.config import load_csv, Config
+from carla_dataset.data import Side
 from carla_dataset.intrinsics import Pinhole90Intrinsics, PinholeIntrinsics, CylindricalIntrinsics
 from imageio import imwrite
 from torch.utils.data import DataLoader
@@ -24,7 +26,8 @@ from tensorboardX import SummaryWriter
 import json
 
 from datasets.carla_dataset import CarlaDataset
-from networks.cube_padding import CubicConv2d
+from networks.cube_padding import CubicConv2d, sides_from_batch
+from networks.cube_poses import CubePosesAndLoss
 from networks.cylindrical_padding import CylindricalConv2d
 from options import Mode
 from utils import *
@@ -56,6 +59,11 @@ class Trainer:
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
         self.parallel = not self.opt.no_cuda and torch.cuda.device_count() > 1
+
+        if self.parallel and self.opt.mode is Mode.Cubemap:
+            assert self.opt.batch_size % torch.cuda.device_count() == 0, f"Cubemap batch size ({self.opt.batch_size})" \
+                                                                         f" must be evenly divisible by the number of" \
+                                                                         f" GPUs ({torch.cuda.device_count()})"
 
 
         self.num_scales = len(self.opt.scales)
@@ -162,6 +170,10 @@ class Trainer:
             self.project_3d[scale] = Project3D(self.opt.batch_size, h, w, options.mode)
             self.project_3d[scale].to(self.device)
 
+        if options.mode is Mode.Cubemap:
+            self.models["cube_pose_and_loss"] = self.wrap_model(CubePosesAndLoss())
+            self.models["cube_pose_and_loss"].to(self.device)
+
         self.depth_metric_names = [
             "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "da/a1", "da/a2", "da/a3"]
 
@@ -230,6 +242,45 @@ class Trainer:
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
 
+    def convert_to_cubemap_batch(self, inputs):
+        '''
+        Color and depth (and color_aug) have inputs for each side, need to gather them
+        :param inputs:
+        :return: inputs
+        '''
+        for frame_id in self.opt.frame_ids:
+            for scale in self.opt.scales:
+                color = []
+                color_aug = []
+                for s in list(Side):
+                    color.append(inputs[(f"{s.name.lower()}_color", frame_id, scale)])
+                    del inputs[(f"{s.name.lower()}_color", frame_id, scale)]
+                    color_aug.append(inputs[(f"{s.name.lower()}_color_aug", frame_id, scale)])
+                    del inputs[(f"{s.name.lower()}_color_aug", frame_id, scale)]
+
+                color = torch.stack(color, dim=1)
+                color_aug = torch.stack(color_aug, dim=1)
+
+                color = color.reshape(-1, *list(color.shape)[2:])
+                color_aug = color_aug.reshape(-1, *list(color_aug.shape)[2:])
+                inputs[("color", frame_id, scale)] = color
+                inputs[("color_aug", frame_id, scale)] = color_aug
+
+        #TODO test depth
+        if "front_depth_gt" in inputs:
+            depth_gt = []
+            for s in list(Side):
+                depth_gt.append(inputs[f"{s.name.lower()}_depth_gt"])
+                del inputs[f"{s.name.lower()}_depth_gt"]
+
+            depth_gt = torch.stack(depth_gt, dim=1)
+
+            depth_gt = depth_gt.reshape(-1, *list(depth_gt.shape)[2:])
+            inputs["depth_gt"] = depth_gt
+
+        return inputs
+
+
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
@@ -238,6 +289,8 @@ class Trainer:
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
+            if self.opt.mode is Mode.Cubemap:
+                inputs = self.convert_to_cubemap_batch(inputs)
 
             before_op_time = time.time()
 
@@ -331,8 +384,13 @@ class Trainer:
                     outputs[("translation", 0, f_i)] = translation
 
                     # Invert the matrix if the frame id is negative
-                    outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
+                    cam_T_cam  = transformation_from_parameters(
                         axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
+
+                    if self.opt.mode is Mode.Cubemap:
+                        outputs[("cube_pose_loss", 0, f_i)], outputs[("cam_T_cam", 0, f_i)] = self.models["cube_pose_and_loss"](cam_T_cam)
+                    else:
+                        outputs[("cam_T_cam", 0, f_i)] = cam_T_cam
 
         else:
             # Here we input all frames to the pose net (and predict all poses) together
@@ -352,8 +410,13 @@ class Trainer:
                 if f_i != "s":
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
-                    outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
+                    cam_T_cam = transformation_from_parameters(
                         axisangle[:, i], translation[:, i])
+
+                    if self.opt.mode is Mode.Cubemap:
+                        outputs[("cube_pose_loss", 0, f_i)], outputs[("cam_T_cam", 0, f_i)] = self.models["cube_pose_and_loss"](cam_T_cam)
+                    else:
+                        outputs[("cam_T_cam", 0, f_i)] = cam_T_cam
 
         return outputs
 
@@ -366,6 +429,9 @@ class Trainer:
         except StopIteration:
             self.val_iter = iter(self.val_loader)
             inputs = self.val_iter.next()
+
+        if self.opt.mode is Mode.Cubemap:
+            inputs = self.convert_to_cubemap_batch(inputs)
 
         with torch.no_grad():
             outputs, losses = self.process_batch(inputs)
@@ -450,6 +516,7 @@ class Trainer:
         losses = {}
         total_loss = 0
 
+        #TODO pose loss will be the same for every scale, could pull out of loop
         for scale in self.opt.scales:
             loss = 0
             reprojection_losses = []
@@ -462,6 +529,9 @@ class Trainer:
             disp = outputs[("disp", scale)]
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
+
+            if self.opt.mode is Mode.Cubemap:
+                pose_losses = []
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
@@ -477,8 +547,13 @@ class Trainer:
                     imwrite(dir / f"target_{i}.png", t.cpu().detach())
 
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
+                if self.opt.mode is Mode.Cubemap:
+                    pose_losses.append(outputs[("cube_pose_loss", 0, frame_id)])
+
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
+            if self.opt.mode is Mode.Cubemap:
+                pose_losses = torch.stack(pose_losses, 1)
 
             if not self.opt.disable_automasking:
                 identity_reprojection_losses = []
@@ -514,6 +589,8 @@ class Trainer:
             else:
                 reprojection_loss = reprojection_losses
 
+
+
             if not self.opt.disable_automasking:
                 # add random numbers to break ties
                 identity_reprojection_loss += torch.randn(
@@ -539,6 +616,10 @@ class Trainer:
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+
+            if self.opt.mode is Mode.Cubemap:
+                loss += pose_losses.mean()
+
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 

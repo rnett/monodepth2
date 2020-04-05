@@ -15,8 +15,5 @@ opts = options.parse()
 
 
 if __name__ == "__main__":
-    if opts.method == "cubemap":
-        trainer = CubemapTrainer(opts)
-    else:
-        trainer = Trainer(opts)
+    trainer = Trainer(opts)
     trainer.train()
