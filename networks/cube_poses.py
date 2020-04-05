@@ -23,9 +23,9 @@ class CubePosesAndLoss(nn.Module):
         # Z: In, out ; X: Side to side ; Y: up and down
         self.top_R = nn.Parameter(rotation_matrix(np.pi / 4, 0, 0).T, requires_grad=False)
         self.bottom_R = nn.Parameter(rotation_matrix(-np.pi / 4, 0, 0).T, requires_grad=False)
-        self.left_R = nn.Parameter(rotation_matrix(0, np.pi / 4, 0).T, requires_grad=False)
-        self.right_R = nn.Parameter(rotation_matrix(0, -np.pi / 4, 0).T, requires_grad=False)
-        self.back_R = nn.Parameter(rotation_matrix(np.pi / 2, 0, 0).T, requires_grad=False)
+        self.left_R = nn.Parameter(rotation_matrix(0, -np.pi / 4, 0).T, requires_grad=False)
+        self.right_R = nn.Parameter(rotation_matrix(0, np.pi / 4, 0).T, requires_grad=False)
+        self.back_R = nn.Parameter(rotation_matrix(0, np.pi / 2, 0).T, requires_grad=False) #TODO do I need to flip X?
         self.filler = nn.Parameter(torch.from_numpy(np.array([0, 0, 0, 1], dtype='float32')), requires_grad=False)
 
         # transofrm from P2 to P1: P1^T @ P2 @ P1
