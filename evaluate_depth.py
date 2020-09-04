@@ -5,11 +5,14 @@ import cv2
 import numpy as np
 
 import torch
+from carla_dataset.config import load_csv
 from torch.utils.data import DataLoader
 
+from carla_utils import convert_to_cubemap_batch, get_datasets, get_params
+from datasets.carla_dataset_loader import CarlaDataset
 from layers import disp_to_depth
 from utils import readlines
-from options import MonodepthOptions
+from options import Mode, MonodepthOptions
 import datasets
 import networks
 
@@ -74,20 +77,19 @@ def evaluate(opt):
 
         print("-> Loading weights from {}".format(opt.load_weights_folder))
 
-        filenames = readlines(os.path.join(splits_dir, opt.eval_split, "test_files.txt"))
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
         encoder_dict = torch.load(encoder_path)
 
-        dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
-                                           encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False)
+        conv_layer, data_lambda, intrinsics = get_params(opt)
+        dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
+                                 [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
-        encoder = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc)
+        encoder = networks.ResnetEncoder(conv_layer, opt.num_layers, False)
+        depth_decoder = networks.DepthDecoder(conv_layer, encoder.num_ch_enc)
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
@@ -105,6 +107,8 @@ def evaluate(opt):
 
         with torch.no_grad():
             for data in dataloader:
+                if opt.mode is Mode.Cubemap:
+                    data = convert_to_cubemap_batch(data, [0], 4)
                 input_color = data[("color", 0, 0)].cuda()
 
                 if opt.post_process:
@@ -125,6 +129,7 @@ def evaluate(opt):
         pred_disps = np.concatenate(pred_disps)
 
     else:
+        conv_layer, data_lambda, intrinsics = get_params(opt)
         # Load predictions from file
         print("-> Loading predictions from {}".format(opt.ext_disp_to_eval))
         pred_disps = np.load(opt.ext_disp_to_eval)
@@ -162,9 +167,6 @@ def evaluate(opt):
         print("-> No ground truth is available for the KITTI benchmark, so not evaluating. Done.")
         quit()
 
-    gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
-
     print("-> Evaluating")
 
     if opt.eval_stereo:
@@ -175,12 +177,20 @@ def evaluate(opt):
     else:
         print("   Mono evaluation - using median scaling")
 
+    gt_depth_dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
+                           [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True, load_color=False)
+    gt_depth_dataloader = DataLoader(gt_depth_dataset, 16, shuffle=False, num_workers=opt.num_workers,
+                            pin_memory=True, drop_last=False)
+
     errors = []
     ratios = []
 
-    for i in range(pred_disps.shape[0]):
+    i = 0
+    for gt_data in gt_depth_dataloader:
+        if opt.mode is Mode.Cubemap:
+            gt_data = convert_to_cubemap_batch(gt_data, [0], 4, do_color=False)
 
-        gt_depth = gt_depths[i]
+        gt_depth = gt_data["depth_gt"]
         gt_height, gt_width = gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
@@ -212,6 +222,7 @@ def evaluate(opt):
         pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
 
         errors.append(compute_errors(gt_depth, pred_depth))
+        i += 1
 
     if not opt.disable_median_scaling:
         ratios = np.array(ratios)

@@ -140,12 +140,20 @@ def cube_pad(x: Tensor, pad_size) -> Tensor:
 
 class CubicConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
-                 padding_mode='cubic'):
+                 padding_mode='zeros'): #TODO not working, size differences causing errors
+        self.cube_padding = padding_mode == "cubic"
+        #TODO try different values to add
+        self.amount_cube_padding = padding + 1
+
+        if self.cube_padding:
+            padding_mode = "zeros"
+            padding = 0
+
         super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if self.padding_mode == "cubic":
-            return super().forward(cube_pad(input, 1))
+        if self.cube_padding:
+            return super().forward(cube_pad(input, self.amount_cube_padding))
         else:
             return super().forward(input)
 

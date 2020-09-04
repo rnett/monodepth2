@@ -34,7 +34,8 @@ class CarlaDataset(data.Dataset):
                  num_scales,
                  is_cubemap=False,
                  is_train=False,
-                 load_depth=False):
+                 load_depth=False,
+                 load_color=True):
         super(data.Dataset, self).__init__()
 
         # index -> (source to use, index in source)
@@ -83,6 +84,7 @@ class CarlaDataset(data.Dataset):
                                                interpolation=self.interp)
 
         self.load_depth = load_depth
+        self.load_color = load_color
 
         self.K = intrinsics.normalized_K
 
@@ -93,6 +95,8 @@ class CarlaDataset(data.Dataset):
         images in this item. This ensures that all images input to the pose network receive the
         same augmentation.
         """
+        if not self.load_color:
+            return
         for k in list(inputs):
             if "color" in k or "color" in k[0]:
                 n, im, i = k
@@ -148,13 +152,14 @@ class CarlaDataset(data.Dataset):
 
         source, frame = self.sources[index]
         with source as d:
-            for i in self.frame_idxs:
-                if self.is_cubemap:
-                    d: SplitData
-                    for s in list(Side):
-                        inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(crop_pinhole_to_90(d[s].color[frame + i]), 'RGB')
-                else:
-                    inputs[("color", i, -1)] = Image.fromarray(d.color[frame + i], 'RGB')
+            if self.load_color:
+                for i in self.frame_idxs:
+                    if self.is_cubemap:
+                        d: SplitData
+                        for s in list(Side):
+                            inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(crop_pinhole_to_90(d[s].color[frame + i]), 'RGB')
+                    else:
+                        inputs[("color", i, -1)] = Image.fromarray(d.color[frame + i], 'RGB')
 
             if self.load_depth:
                 if self.is_cubemap:
@@ -184,14 +189,15 @@ class CarlaDataset(data.Dataset):
 
         self.preprocess(inputs, color_aug)
 
-        for i in self.frame_idxs:
-            if self.is_cubemap:
-                for s in list(Side):
-                    del inputs[(f"{s.name.lower()}_color", i, -1)]
-                    del inputs[(f"{s.name.lower()}_color_aug", i, -1)]
-            else:
-                del inputs[("color", i, -1)]
-                del inputs[("color_aug", i, -1)]
+        if self.load_color:
+            for i in self.frame_idxs:
+                if self.is_cubemap:
+                    for s in list(Side):
+                        del inputs[(f"{s.name.lower()}_color", i, -1)]
+                        del inputs[(f"{s.name.lower()}_color_aug", i, -1)]
+                else:
+                    del inputs[("color", i, -1)]
+                    del inputs[("color_aug", i, -1)]
 
         return inputs
 

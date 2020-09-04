@@ -6,12 +6,15 @@
 
 from __future__ import absolute_import, division, print_function
 
-import numpy as np
+from typing import Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from carla_dataset.data import Side
 
+from networks.cube_padding import sides_from_batch, sides_to_batch
 from options import Mode
 
 
@@ -139,7 +142,15 @@ class Conv3x3(nn.Module):
         out = self.conv(out)
         return out
 
-#TODO concatenage all images/methgrids, sample from concatenated images like in preprocessing?
+
+# TODO concatenage all images/methgrids, sample from concatenated images like in preprocessing?
+'''
+Concatenate images, use spherical coords instead of multiplying by K (?), use spherical K to undo.
+Key is that output[x, y] = [orig_x, orig_y]
+Need "decode" from world to take into account offset, etc.
+'''
+
+
 class BackprojectDepth(nn.Module):
     """Layer to transform a depth image into a point cloud
     """
@@ -147,7 +158,11 @@ class BackprojectDepth(nn.Module):
     def __init__(self, batch_size, height, width, mode: Mode):
         super(BackprojectDepth, self).__init__()
 
+        if mode is Mode.Cubemap:
+            batch_size *= 6
+
         self.batch_size = batch_size
+
         self.height = height
         self.width = width
         self.mode = mode
@@ -163,18 +178,23 @@ class BackprojectDepth(nn.Module):
 
         self.pix_coords = torch.unsqueeze(torch.stack(
             [self.id_coords[0].view(-1), self.id_coords[1].view(-1)], 0), 0)
-        self.pix_coords = self.pix_coords.repeat(batch_size, 1, 1)
+        self.pix_coords = self.pix_coords.repeat(self.batch_size, 1, 1)
         self.pix_coords = nn.Parameter(torch.cat([self.pix_coords, self.ones], 1),
                                        requires_grad=False)
 
     def forward(self, depth, inv_K):
+        # turns it into pinhole/cylindrical coords
         cam_points = torch.matmul(inv_K[:, :3, :3], self.pix_coords)
 
+        # turns it into world coords
         if self.mode is Mode.Cylindrical:
             X = torch.sin(cam_points[:, 0:1, :])
             Y = cam_points[:, 1:2, :]
             Z = torch.cos(cam_points[:, 0:1, :])
             cam_points = torch.cat([X, Y, Z], dim=1) * depth.view(self.batch_size, 1, -1)
+        elif self.mode is Mode.Cubemap:
+            # same as pinhole
+            cam_points = depth.view(self.batch_size, 1, -1) * cam_points
         else:
             cam_points = depth.view(self.batch_size, 1, -1) * cam_points
 
@@ -183,12 +203,109 @@ class BackprojectDepth(nn.Module):
         return cam_points
 
 
+def front_to_side(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor, side: Side) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor]:
+    '''
+    :return: X, Y, Z (from side pov)
+    '''
+    if side is Side.Back:  # back
+        new_X = -X
+        new_Y = -Y
+        new_Z = Z
+    elif side is Side.Front:  # front (do nothing)
+        new_X = X
+        new_Y = Y
+        new_Z = Z
+    elif side is Side.Top:  # top
+        new_X = Z
+        new_Y = Y
+        new_Z = -X
+    elif side is Side.Bottom:  # bottom
+        new_X = -Z
+        new_Y = Y
+        new_Z = X
+    elif side is Side.Left:  # left
+        new_X = Y
+        new_Y = -X
+        new_Z = Z
+    elif side is Side.Right:  # right
+        new_X = -Y
+        new_Y = X
+        new_Z = X
+    else:
+        raise ValueError
+
+    return new_X, new_Y, new_Z
+
+'''
+Right Hand rule: Z is Up, X is Forward, Y is Left
+'''
+
+def side_to_front(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor, side: Side) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor]:
+    if side is Side.Back:  # back: +/-180 Z
+        new_X = -X
+        new_Y = -Y
+        new_Z = Z
+    elif side is Side.Front:  # front: 0
+        new_X = X
+        new_Y = Y
+        new_Z = Z
+    elif side is Side.Top:  # top: +90 Y
+        new_X = -Z
+        new_Y = Y
+        new_Z = X
+    elif side is Side.Bottom:  # bottom: =90 Y
+        new_X = Z
+        new_Y = Y
+        new_Z = -X
+    elif side is Side.Left:  # left: -90 Z
+        new_X = -Y
+        new_Y = X
+        new_Z = Z
+    elif side is Side.Right:  # right: +90 Z
+        new_X = Y
+        new_Y = -X
+        new_Z = Z
+    else:
+        raise ValueError
+
+    return new_X, new_Y, new_Z
+
+
+def concat_coords(X, Y, Z):
+    return torch.cat([X, Y, Z], dim=1)
+
+
+def split_coords(P):
+    return P[:, 0:1, :], P[:, 1:2, :], P[:, 2:3, :]
+
+
+"""
+Use BackProjectDepth w/ pinhole to get world coords for each image
+
+Project3D:
+Offset angle of coords properly for each side
+Then do P matmul
+Combine/stack into single sphere image, Convert to spherical coords
+Find out-of-frame values, calculate frame offset & offset in target frame 
+Convert to pinhole, un-offset-angle
+Replace out-of-frame values with their offset in the target frame (converted to pinhole)
+Do transforms to get pix values (this will transform out-of-frame values as if they are in-frame, which is the same 
+as if they are in their target frame, as all frames are transformed identically)
+Add frame offsets (in pix values) to out-of-frame values, concatenate & offset frames
+"""
+
+
 class Project3D(nn.Module):
     """Layer which projects 3D points into a camera with intrinsics K and at position T
     """
 
     def __init__(self, batch_size, height, width, mode: Mode, eps=1e-7):
         super(Project3D, self).__init__()
+
+        if mode is Mode.Cubemap:
+            batch_size *= 6
 
         self.batch_size = batch_size
         self.height = height
@@ -202,6 +319,20 @@ class Project3D(nn.Module):
     def forward(self, points, K, T):
         P = T[:, :3, :]
 
+        # if self.mode is Mode.Cubemap:
+        #     top, bottom, left, right, front, back = sides_from_batch(points)
+        #     top = concat_coords(*side_to_front(*split_coords(top), side=Side.Top))
+        #     bottom = concat_coords(*side_to_front(*split_coords(bottom), side=Side.Bottom))
+        #     left = concat_coords(*side_to_front(*split_coords(left), side=Side.Left))
+        #     right = concat_coords(*side_to_front(*split_coords(right), side=Side.Right))
+        #     front = concat_coords(*side_to_front(*split_coords(front), side=Side.Front))
+        #     back = concat_coords(*side_to_front(*split_coords(back), side=Side.Back))
+        #     points = sides_to_batch(top, bottom, left, right, front, back)
+        #     points = torch.cat([points, self.ones], dim=1)
+
+        # cubemap: P = [24, 3, 4], points = [24, 3, 8]
+
+        # poses are already side-pov
         cam_points = torch.matmul(P, points)
 
         if self.mode is Mode.Cylindrical:
@@ -209,21 +340,92 @@ class Project3D(nn.Module):
             Y = cam_points[:, 1:2, :]
             Z = cam_points[:, 2:3, :]
 
-            h = Y / (torch.sqrt(X*X + Z*Z) + self.eps)
+            h = Y / (torch.sqrt(X * X + Z * Z) + self.eps)
             theta = torch.atan2(X, Z)
             pix_coords = torch.cat([theta, h], dim=1)
+        elif self.mode is Mode.Cubemap:
+            side_coords = sides_from_batch(cam_points)
+            world_coords = [concat_coords(*side_to_front(*split_coords(coords), side=side)) for coords, side in zip(side_coords, list(Side))]
+
+            offsets = []
+
+            for coords, side in zip(side_coords, list(Side)):
+                # X = coords[:, 0:1, :]
+                # Y = coords[:, 1:2, :]
+                # Z = coords[:, 2:3, :]
+                #
+                # side_world_coords = world_coords[side.value]
+                #
+                # theta = torch.atan2(X, Z)
+                # phi = torch.asin(Y / torch.sqrt(X*X + Y*Y + Z*Z))
+                #
+                # out_of_range: torch.Tensor = (torch.abs(theta) > np.pi / 2) | (torch.abs(phi) > np.pi / 2)
+                # out_of_range_world_coords = side_world_coords * out_of_range
+                # mags = torch.argmax(torch.abs(out_of_range_world_coords), dim=1, keepdim=True)
+                #
+                # mag_values = torch.sign(out_of_range_world_coords).permute(0, 2, 1).gather(dim=-1, index=mags.permute(0, 2, 1)).squeeze()
+                #
+                # mags = mags.squeeze() * mag_values
+                #
+                # mags = mags.unsqueeze(dim=1)
+                # mags = mags * out_of_range
+                # 0 -> In Range, 1 -> +X -> Front, -1 -> -X -> Back, 2 -> Y -> Bottom, -2 -> -Y -> Top, 3 -> Z -> Right, -3 -> -Z -> Left
+
+                # TODO can I check out of range by seeing if the mags predicted side matches the given side?
+                #   would save calculating theta and phi
+
+                # side -> mags value
+                indices = {Side.Top: -2, Side.Bottom: 2, Side.Left: -3, Side.Right: 3, Side.Front: 1, Side.Back: -1}
+                sides = torch.zeros(size=(self.batch_size // 6, 1, self.height * self.width), dtype=torch.float).to(points.device) + side.value
+                # for target_side in list(Side):
+                #
+                #     if target_side is side:
+                #         continue
+                #
+                #     mask = mags == indices[target_side]
+                #     if mask.any():
+                #         sides[mask] = target_side.value
+                #         all_mask = mask.repeat(1, 3, 1)
+                #         coords[all_mask] = concat_coords(*side_to_world(*split_coords(out_of_range_world_coords), side=target_side))[all_mask]
+
+                offsets.append(sides)
+
+            for i in range(len(offsets)):
+                offsets[i] = offsets[i].view(self.batch_size // 6, self.height, self.width)
+
+            # side_coords is the in-side location, offsets is which side (absolute)
+            # offset should be the current side for most
+
+            # treat like pinhole (except add offset at the end)
+
+            cam_points = sides_to_batch(*side_coords)
+            pix_coords = cam_points[:, :2, :] / (cam_points[:, 2, :].unsqueeze(1) + self.eps)
         else:
+            # [x, y] = [x, y] / z
             pix_coords = cam_points[:, :2, :] / (cam_points[:, 2, :].unsqueeze(1) + self.eps)
 
+        # [x, y] *= [f_x, f_y]
+        # converts from pinhole/cylindrical to pix coords
         pix_coords = torch.cat([pix_coords, self.ones], dim=1)
         pix_coords = torch.matmul(K[:, :3, :3], pix_coords)
         pix_coords = pix_coords[:, :2, :]
 
         pix_coords = pix_coords.view(self.batch_size, 2, self.height, self.width)
+
         pix_coords = pix_coords.permute(0, 2, 3, 1)
 
+        # X is first, but Width is second
+
+        if self.mode is Mode.Cubemap:
+            # concat along width
+            offsets = torch.cat(offsets, dim=2)
+            sides = sides_from_batch(pix_coords)
+            pix_coords = torch.cat(sides, dim=2)
+            pix_coords[..., 0] += (offsets * self.width)
+
         # change from a 0-width range to a -1-1 range.
-        pix_coords[..., 0] /= self.width - 1
+        # x is 0, but width is 1
+        pix_coords[..., 0] /= self.width * (6 if self.mode is Mode.Cubemap else 1) - 1
         pix_coords[..., 1] /= self.height - 1
         pix_coords = (pix_coords - 0.5) * 2
 

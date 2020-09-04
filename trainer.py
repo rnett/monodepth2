@@ -25,7 +25,8 @@ from tensorboardX import SummaryWriter
 
 import json
 
-from datasets.carla_dataset import CarlaDataset
+from carla_utils import convert_to_cubemap_batch, get_datasets, get_params
+from datasets.carla_dataset_loader import CarlaDataset
 from networks.cube_padding import CubicConv2d, sides_from_batch
 from networks.cube_poses import CubePosesAndLoss
 from networks.cylindrical_padding import CylindricalConv2d
@@ -38,12 +39,6 @@ import datasets
 import networks
 from IPython import embed
 
-
-def get_pinhole_front(r: Config):
-    return r.pinhole_data.front
-
-def get_cylindrical(r: Config):
-    return r.cylindrical_data
 
 class Trainer:
     def __init__(self, options):
@@ -65,7 +60,6 @@ class Trainer:
                                                                          f" must be evenly divisible by the number of" \
                                                                          f" GPUs ({torch.cuda.device_count()})"
 
-
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
         self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
@@ -77,39 +71,40 @@ class Trainer:
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
 
-        conv_layer, data_lambda, intrinsics = self.get_params(options)
+        conv_layer, data_lambda, intrinsics = get_params(options)
         self.intrinsics = intrinsics
 
         self.models["encoder"] = networks.ResnetEncoder(conv_layer,
-            self.opt.num_layers, self.opt.weights_init == "pretrained")
+                                                        self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.store_model("encoder")
 
         self.models["depth"] = networks.DepthDecoder(conv_layer,
-            self.get_num_ch_enc(self.models["encoder"]), self.opt.scales)
+                                                     self.get_num_ch_enc(self.models["encoder"]), self.opt.scales)
         self.store_model("depth")
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
                 self.models["pose_encoder"] = networks.ResnetEncoder(conv_layer,
-                    self.opt.num_layers,
-                    self.opt.weights_init == "pretrained",
-                    num_input_images=self.num_pose_frames)
+                                                                     self.opt.num_layers,
+                                                                     self.opt.weights_init == "pretrained",
+                                                                     num_input_images=self.num_pose_frames)
                 self.store_model("pose_encoder")
 
                 self.models["pose_encoder"].to(self.device)
 
                 self.models["pose"] = networks.PoseDecoder(conv_layer,
-                    self.get_num_ch_enc(self.models["pose_encoder"]),
-                    num_input_features=1,
-                    num_frames_to_predict_for=2)
+                                                           self.get_num_ch_enc(self.models["pose_encoder"]),
+                                                           num_input_features=1,
+                                                           num_frames_to_predict_for=2)
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(conv_layer,
-                    self.get_num_ch_enc(self.models["encoder"]), self.num_pose_frames)
+                                                           self.get_num_ch_enc(self.models["encoder"]),
+                                                           self.num_pose_frames)
 
             elif self.opt.pose_model_type == "posecnn":
                 self.models["pose"] = networks.PoseCNN(conv_layer,
-                    self.num_input_frames if self.opt.pose_model_input == "all" else 2)
+                                                       self.num_input_frames if self.opt.pose_model_input == "all" else 2)
 
             self.store_model("pose")
 
@@ -120,10 +115,10 @@ class Trainer:
             # Our implementation of the predictive masking baseline has the the same architecture
             # as our depth decoder. We predict a separate mask for each source frame.
             self.models["predictive_mask"] = networks.DepthDecoder(conv_layer,
-                self.get_num_ch_enc(self.models["encoder"]), self.opt.scales,
-                num_output_channels=(len(self.opt.frame_ids) - 1))
+                                                                   self.get_num_ch_enc(self.models["encoder"]),
+                                                                   self.opt.scales,
+                                                                   num_output_channels=(len(self.opt.frame_ids) - 1))
             self.store_model("predictive_mask")
-
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
@@ -134,12 +129,13 @@ class Trainer:
 
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
-        print("Training is using:\n  ", f"{self.device}" + (f" on {torch.cuda.device_count()} GPUs" if self.parallel else ""))
+        print("Training is using:\n  ",
+              f"{self.device}" + (f" on {torch.cuda.device_count()} GPUs" if self.parallel else ""))
 
         num_train_samples = len(load_csv(options.train_data)) * 1000
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
-        train_dataset, val_dataset = self.get_datasets(options, data_lambda, intrinsics)
+        train_dataset, val_dataset = get_datasets(options, data_lambda, intrinsics)
 
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
@@ -154,7 +150,7 @@ class Trainer:
             self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
 
         if not self.opt.no_ssim:
-            self.ssim = self.wrap_model(SSIM()) #TODO can I parallelize?
+            self.ssim = self.wrap_model(SSIM())  # TODO can I parallelize?
             self.ssim.to(self.device)
 
         self.backproject_depth = {}
@@ -163,7 +159,7 @@ class Trainer:
             h = intrinsics.height // (2 ** scale)
             w = intrinsics.width // (2 ** scale)
 
-            #TODO should be able to paralalize
+            # TODO should be able to paralalize
             self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w, options.mode)
             self.backproject_depth[scale].to(self.device)
 
@@ -202,23 +198,6 @@ class Trainer:
         else:
             return model.num_ch_enc
 
-    def get_params(self, options):
-        if options.mode is Mode.Cylindrical:
-            return CylindricalConv2d, get_cylindrical, CylindricalIntrinsics()
-        elif options.mode is Mode.Cubemap:
-            return CubicConv2d, get_pinhole_front, Pinhole90Intrinsics()
-        else:
-            return nn.Conv2d, get_pinhole_front, PinholeIntrinsics()
-
-    def get_datasets(self, options, data_lambda, intrinsics):
-        train_dataset = CarlaDataset(load_csv(options.train_data), data_lambda, intrinsics,
-                                     self.opt.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap)
-
-        val_dataset = CarlaDataset(load_csv(options.val_data), data_lambda, intrinsics,
-                                   self.opt.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap)
-
-        return train_dataset, val_dataset
-
     def set_train(self):
         """Convert all models to training mode
         """
@@ -242,45 +221,6 @@ class Trainer:
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
 
-    def convert_to_cubemap_batch(self, inputs):
-        '''
-        Color and depth (and color_aug) have inputs for each side, need to gather them
-        :param inputs:
-        :return: inputs
-        '''
-        for frame_id in self.opt.frame_ids:
-            for scale in self.opt.scales:
-                color = []
-                color_aug = []
-                for s in list(Side):
-                    color.append(inputs[(f"{s.name.lower()}_color", frame_id, scale)])
-                    del inputs[(f"{s.name.lower()}_color", frame_id, scale)]
-                    color_aug.append(inputs[(f"{s.name.lower()}_color_aug", frame_id, scale)])
-                    del inputs[(f"{s.name.lower()}_color_aug", frame_id, scale)]
-
-                color = torch.stack(color, dim=1)
-                color_aug = torch.stack(color_aug, dim=1)
-
-                color = color.reshape(-1, *list(color.shape)[2:])
-                color_aug = color_aug.reshape(-1, *list(color_aug.shape)[2:])
-                inputs[("color", frame_id, scale)] = color
-                inputs[("color_aug", frame_id, scale)] = color_aug
-
-        #TODO test depth
-        if "front_depth_gt" in inputs:
-            depth_gt = []
-            for s in list(Side):
-                depth_gt.append(inputs[f"{s.name.lower()}_depth_gt"])
-                del inputs[f"{s.name.lower()}_depth_gt"]
-
-            depth_gt = torch.stack(depth_gt, dim=1)
-
-            depth_gt = depth_gt.reshape(-1, *list(depth_gt.shape)[2:])
-            inputs["depth_gt"] = depth_gt
-
-        return inputs
-
-
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
@@ -290,7 +230,7 @@ class Trainer:
 
         for batch_idx, inputs in enumerate(self.train_loader):
             if self.opt.mode is Mode.Cubemap:
-                inputs = self.convert_to_cubemap_batch(inputs)
+                inputs = convert_to_cubemap_batch(inputs, self.opt.frame_ids, self.opt.scales)
 
             before_op_time = time.time()
 
@@ -384,11 +324,12 @@ class Trainer:
                     outputs[("translation", 0, f_i)] = translation
 
                     # Invert the matrix if the frame id is negative
-                    cam_T_cam  = transformation_from_parameters(
+                    cam_T_cam = transformation_from_parameters(
                         axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
 
                     if self.opt.mode is Mode.Cubemap:
-                        outputs[("cube_pose_loss", 0, f_i)], outputs[("cam_T_cam", 0, f_i)] = self.models["cube_pose_and_loss"](cam_T_cam)
+                        outputs[("cube_pose_loss", 0, f_i)], outputs[("cam_T_cam", 0, f_i)] = self.models[
+                            "cube_pose_and_loss"](cam_T_cam)
                     else:
                         outputs[("cam_T_cam", 0, f_i)] = cam_T_cam
 
@@ -414,7 +355,8 @@ class Trainer:
                         axisangle[:, i], translation[:, i])
 
                     if self.opt.mode is Mode.Cubemap:
-                        outputs[("cube_pose_loss", 0, f_i)], outputs[("cam_T_cam", 0, f_i)] = self.models["cube_pose_and_loss"](cam_T_cam)
+                        outputs[("cube_pose_loss", 0, f_i)], outputs[("cam_T_cam", 0, f_i)] = self.models[
+                            "cube_pose_and_loss"](cam_T_cam)
                     else:
                         outputs[("cam_T_cam", 0, f_i)] = cam_T_cam
 
@@ -470,7 +412,6 @@ class Trainer:
 
                 # from the authors of https://arxiv.org/abs/1712.00175
                 if self.opt.pose_model_type == "posecnn":
-
                     axisangle = outputs[("axisangle", 0, frame_id)]
                     translation = outputs[("translation", 0, frame_id)]
 
@@ -479,6 +420,11 @@ class Trainer:
 
                     T = transformation_from_parameters(
                         axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0], frame_id < 0)
+                    if self.opt.mode is Mode.Cubemap:
+                        _, T = self.models["cube_pose_and_loss"](T)
+
+                # new_T = T[Side.Front.value]
+                # T = new_T.unsqueeze(0).repeat(T.shape[0], 1, 1)
 
                 cam_points = self.backproject_depth[source_scale](
                     depth, inputs[("inv_K", source_scale)])
@@ -487,10 +433,36 @@ class Trainer:
 
                 outputs[("sample", frame_id, scale)] = pix_coords
 
-                outputs[("color", frame_id, scale)] = F.grid_sample(
-                    inputs[("color", frame_id, source_scale)],
-                    outputs[("sample", frame_id, scale)],
+                if self.opt.mode is Mode.Cubemap:
+                    color = inputs[("color", frame_id, source_scale)]
+                    sides = sides_from_batch(color)
+                    color = torch.cat(sides, dim=3)
+                else:
+                    color = inputs[("color", frame_id, source_scale)]
+
+                sampled = F.grid_sample(
+                    color,
+                    pix_coords,
                     align_corners=True, padding_mode="border")
+
+                # values seem correct for Front on manual inspection, output is not
+
+                # undo concating along width
+                original = color[0]
+                transformed = sampled[0]
+
+                #TODO height and width order doesn't seem to match for pinhole and cubemap (permutation is wrong for pinhole)
+                original = original.detach().cpu().permute(1, 2, 0).numpy()
+                transformed = transformed.detach().cpu().permute(1, 2, 0).numpy()
+                imwrite("/home/rnett/original.png", original)
+                imwrite("/home/rnett/transformed.png", transformed)
+
+                if self.opt.mode is Mode.Cubemap:
+                    width = int(sampled.shape[1] / 6)
+                    sides = [sampled[:, :, width * j: width * (j + 1), :] for j in range(6)]
+                    sampled = sides_to_batch(*sides)
+
+                outputs[("color", frame_id, scale)] = sampled
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
@@ -516,7 +488,7 @@ class Trainer:
         losses = {}
         total_loss = 0
 
-        #TODO pose loss will be the same for every scale, could pull out of loop
+        # TODO pose loss will be the same for every scale, could pull out of loop
         for scale in self.opt.scales:
             loss = 0
             reprojection_losses = []
@@ -549,7 +521,6 @@ class Trainer:
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
                 if self.opt.mode is Mode.Cubemap:
                     pose_losses.append(outputs[("cube_pose_loss", 0, frame_id)])
-
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
             if self.opt.mode is Mode.Cubemap:
@@ -589,8 +560,6 @@ class Trainer:
             else:
                 reprojection_loss = reprojection_losses
 
-
-
             if not self.opt.disable_automasking:
                 # add random numbers to break ties
                 identity_reprojection_loss += torch.randn(
@@ -607,7 +576,7 @@ class Trainer:
 
             if not self.opt.disable_automasking:
                 outputs["identity_selection/{}".format(scale)] = (
-                    idxs > identity_reprojection_loss.shape[1] - 1).float()
+                        idxs > identity_reprojection_loss.shape[1] - 1).float()
 
             loss += to_optimise.mean()
 
@@ -618,6 +587,7 @@ class Trainer:
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
 
             if self.opt.mode is Mode.Cubemap:
+                # TODO add lambda factor?  optimize as hyperparam?
                 loss += pose_losses.mean()
 
             total_loss += loss
@@ -663,9 +633,9 @@ class Trainer:
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (
-            self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
+                                     self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
         print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
+                       " | loss: {:.5f} | time elapsed: {} | time left: {}"
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 

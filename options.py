@@ -30,6 +30,10 @@ class MonodepthOptions:
                                  type=str,
                                  help="path to the validation data",
                                  default="val_data.csv")
+        self.parser.add_argument("--test_data",
+                                 type=str,
+                                 help="path to the test data",
+                                 default="test_data.csv")
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
