@@ -48,12 +48,11 @@ def rotation_matrix(x_angle, y_angle, z_angle):  # + is from y to z, z to x, and
     return torch.from_numpy(rot)
 
 
+# TODO make sure this should be in this order, not reversed
+# change is rotations FROM current coords TO dest coords  i.e. rotation from given side to the front
 def change_basis(T, change):
     return change @ T @ change.T
 
-# TODO check this
-# TODO Use axes swap/neg instead?  Don't think it would work w/ rotation
-# TODO 99% sure this is wrong.  EX: Left doesn't rorate around the Y axis
 class CubePosesAndLoss(nn.Module):
     def __init__(self, include_loss=True):
         super(CubePosesAndLoss, self).__init__()
@@ -97,7 +96,6 @@ class CubePosesAndLoss(nn.Module):
         front = pose
 
         pose = sides_to_batch(top, bottom, left, right, front, back)
-        # pose = torch.cat([pose, self.filler.reshape(1, 1, 4).repeat(pose.shape[0], 1, 1)], dim=1)
 
         if self.include_loss:
             loss = poses.std(dim=1, keepdim=False, unbiased=False).sum(1).sum(1)
