@@ -305,8 +305,8 @@ class Project3D(nn.Module):
                 #
                 # side_world_coords = world_coords[side.value]
                 #
-                # theta = torch.atan2(Z, -X)
-                # phi = torch.asin(Z / torch.sqrt(X*X + Y*Y + Z*Z))
+                # theta = torch.atan2(X, Z)
+                # phi = torch.asin(Y / torch.sqrt(X*X + Y*Y + Z*Z))
                 #
                 # out_of_range: torch.Tensor = (torch.abs(theta) > np.pi / 2) | (torch.abs(phi) > np.pi / 2)
                 # out_of_range_world_coords = side_world_coords * out_of_range
