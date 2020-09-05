@@ -50,20 +50,21 @@ def rotation_matrix(x_angle, y_angle, z_angle):  # + is from y to z, z to x, and
 
 # TODO make sure this should be in this order, not reversed
 # change is rotations FROM current coords TO dest coords  i.e. rotation from given side to the front
-def change_basis(T, change):
-    return change @ T @ change.T
+def change_basis(pose, change):
+    return change.T @ pose @ change
 
 class CubePosesAndLoss(nn.Module):
     def __init__(self, include_loss=True):
         super(CubePosesAndLoss, self).__init__()
-        # These are rotations FROM the side, TO front  i.e. side_to_front
 
         rot = np.pi / 2
 
-        self.top_R = nn.Parameter(rotation_matrix(0, -rot, 0), requires_grad=False)
-        self.bottom_R = nn.Parameter(rotation_matrix(0, rot, 0), requires_grad=False)
-        self.left_R = nn.Parameter(rotation_matrix(0, 0, -rot), requires_grad=False)
-        self.right_R = nn.Parameter(rotation_matrix(0, 0, rot), requires_grad=False)
+        # These are rotations FROM the side, TO front  i.e. side_to_front
+        # Current used coords: X is Right, Y is Down, Z is Forward
+        self.top_R = nn.Parameter(rotation_matrix(-rot, 0, 0), requires_grad=False)
+        self.bottom_R = nn.Parameter(rotation_matrix(rot, 0, 0), requires_grad=False)
+        self.left_R = nn.Parameter(rotation_matrix(0, rot, 0), requires_grad=False)
+        self.right_R = nn.Parameter(rotation_matrix(0, -rot, 0), requires_grad=False)
         self.back_R = nn.Parameter(rotation_matrix(0, 0, np.pi), requires_grad=False)
 
         self.filler = nn.Parameter(torch.from_numpy(np.array([0, 0, 0, 1], dtype='float32')), requires_grad=False)
@@ -86,6 +87,18 @@ class CubePosesAndLoss(nn.Module):
         # top, bottom,
         poses = torch.stack([left, right, front, back], dim=1)
         pose = poses.mean(dim=1, keepdim=False)
+
+        add_forward = 0.05
+        add_right = 0
+        add_up = 0
+
+        add = torch.zeros(4, 4, device=pose.device, dtype=torch.float32)
+        add[:3, 3] = torch.FloatTensor([add_right, -add_up, add_forward]).to(pose.device)
+
+        # multiple = torch.ones(4, 4, device=pose.device, dtype=torch.float32)
+        # multiple[:3, 3] = torch.FloatTensor([1, 1, 1]).to(pose.device)
+
+        pose = (pose + add)#  * multiple
 
         # translate back to original PoV
         top = change_basis(pose, self.top_R.T)

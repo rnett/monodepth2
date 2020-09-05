@@ -143,16 +143,12 @@ class Conv3x3(nn.Module):
         return out
 
 
-# TODO concatenage all images/methgrids, sample from concatenated images like in preprocessing?
-'''
-Concatenate images, use spherical coords instead of multiplying by K (?), use spherical K to undo.
-Key is that output[x, y] = [orig_x, orig_y]
-Need "decode" from world to take into account offset, etc.
-'''
-
 
 class BackprojectDepth(nn.Module):
     """Layer to transform a depth image into a point cloud
+
+    Axes of cloud are X is right, Y is down, Z is forward
+
     """
 
     def __init__(self, batch_size, height, width, mode: Mode):
@@ -202,71 +198,37 @@ class BackprojectDepth(nn.Module):
 
         return cam_points
 
-
-def front_to_side(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor, side: Side) -> Tuple[
-    torch.Tensor, torch.Tensor, torch.Tensor]:
-    '''
-    :return: X, Y, Z (from side pov)
-    '''
-    if side is Side.Back:  # back
-        new_X = -X
-        new_Y = -Y
-        new_Z = Z
-    elif side is Side.Front:  # front (do nothing)
-        new_X = X
-        new_Y = Y
-        new_Z = Z
-    elif side is Side.Top:  # top
-        new_X = Z
-        new_Y = Y
-        new_Z = -X
-    elif side is Side.Bottom:  # bottom
-        new_X = -Z
-        new_Y = Y
-        new_Z = X
-    elif side is Side.Left:  # left
-        new_X = Y
-        new_Y = -X
-        new_Z = Z
-    elif side is Side.Right:  # right
-        new_X = -Y
-        new_Y = X
-        new_Z = X
-    else:
-        raise ValueError
-
-    return new_X, new_Y, new_Z
-
 '''
-Right Hand rule: Z is Up, X is Forward, Y is Left
+Axes: X is Right, Y is Down, Z is Forward 
+
 '''
 
 def side_to_front(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor, side: Side) -> Tuple[
     torch.Tensor, torch.Tensor, torch.Tensor]:
-    if side is Side.Back:  # back: +/-180 Z
+    if side is Side.Back:  # back: +/-180 Y
         new_X = -X
-        new_Y = -Y
-        new_Z = Z
+        new_Y = Y
+        new_Z = -Z
     elif side is Side.Front:  # front: 0
         new_X = X
         new_Y = Y
         new_Z = Z
-    elif side is Side.Top:  # top: +90 Y
+    elif side is Side.Top:  # top: -90 X
+        new_X = X
+        new_Y = -Z
+        new_Z = Y
+    elif side is Side.Bottom:  # bottom: +90 X
+        new_X = X
+        new_Y = Z
+        new_Z = -Y
+    elif side is Side.Left:  # left: +90 Y
         new_X = -Z
         new_Y = Y
         new_Z = X
-    elif side is Side.Bottom:  # bottom: =90 Y
+    elif side is Side.Right:  # right: -90 Y
         new_X = Z
         new_Y = Y
         new_Z = -X
-    elif side is Side.Left:  # left: -90 Z
-        new_X = -Y
-        new_Y = X
-        new_Z = Z
-    elif side is Side.Right:  # right: +90 Z
-        new_X = Y
-        new_Y = -X
-        new_Z = Z
     else:
         raise ValueError
 
@@ -319,19 +281,6 @@ class Project3D(nn.Module):
     def forward(self, points, K, T):
         P = T[:, :3, :]
 
-        # if self.mode is Mode.Cubemap:
-        #     top, bottom, left, right, front, back = sides_from_batch(points)
-        #     top = concat_coords(*side_to_front(*split_coords(top), side=Side.Top))
-        #     bottom = concat_coords(*side_to_front(*split_coords(bottom), side=Side.Bottom))
-        #     left = concat_coords(*side_to_front(*split_coords(left), side=Side.Left))
-        #     right = concat_coords(*side_to_front(*split_coords(right), side=Side.Right))
-        #     front = concat_coords(*side_to_front(*split_coords(front), side=Side.Front))
-        #     back = concat_coords(*side_to_front(*split_coords(back), side=Side.Back))
-        #     points = sides_to_batch(top, bottom, left, right, front, back)
-        #     points = torch.cat([points, self.ones], dim=1)
-
-        # cubemap: P = [24, 3, 4], points = [24, 3, 8]
-
         # poses are already side-pov
         cam_points = torch.matmul(P, points)
 
@@ -356,8 +305,8 @@ class Project3D(nn.Module):
                 #
                 # side_world_coords = world_coords[side.value]
                 #
-                # theta = torch.atan2(X, Z)
-                # phi = torch.asin(Y / torch.sqrt(X*X + Y*Y + Z*Z))
+                # theta = torch.atan2(Z, -X)
+                # phi = torch.asin(Z / torch.sqrt(X*X + Y*Y + Z*Z))
                 #
                 # out_of_range: torch.Tensor = (torch.abs(theta) > np.pi / 2) | (torch.abs(phi) > np.pi / 2)
                 # out_of_range_world_coords = side_world_coords * out_of_range
