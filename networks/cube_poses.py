@@ -92,13 +92,13 @@ class CubePosesAndLoss(nn.Module):
         add_right = 0
         add_up = 0
 
-        add = torch.zeros(4, 4, device=pose.device, dtype=torch.float32)
-        add[:3, 3] = torch.FloatTensor([add_right, -add_up, add_forward]).to(pose.device)
+        # add = torch.zeros(4, 4, device=pose.device, dtype=torch.float32)
+        # add[:3, 3] = torch.FloatTensor([add_right, -add_up, add_forward]).to(pose.device)
 
         # multiple = torch.ones(4, 4, device=pose.device, dtype=torch.float32)
         # multiple[:3, 3] = torch.FloatTensor([1, 1, 1]).to(pose.device)
 
-        pose = (pose + add)#  * multiple
+        # pose = (pose + add)#  * multiple
 
         # translate back to original PoV
         top = change_basis(pose, self.top_R.T)

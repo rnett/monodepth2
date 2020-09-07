@@ -235,6 +235,37 @@ def side_to_front(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor, side: Side)
     return new_X, new_Y, new_Z
 
 
+def front_to_side(X: torch.Tensor, Y: torch.Tensor, Z: torch.Tensor, side: Side) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor]:
+    if side is Side.Back:  # back: +/-180 Y
+        new_X = -X
+        new_Y = Y
+        new_Z = -Z
+    elif side is Side.Front:  # front: 0
+        new_X = X
+        new_Y = Y
+        new_Z = Z
+    elif side is Side.Top:  # top: -90 X
+        new_X = X
+        new_Y = Z
+        new_Z = -Y
+    elif side is Side.Bottom:  # bottom: +90 X
+        new_X = X
+        new_Y = -Z
+        new_Z = Y
+    elif side is Side.Left:  # left: +90 Y
+        new_X = Z
+        new_Y = Y
+        new_Z = -X
+    elif side is Side.Right:  # right: -90 Y
+        new_X = -Z
+        new_Y = Y
+        new_Z = X
+    else:
+        raise ValueError
+
+    return new_X, new_Y, new_Z
+
 def concat_coords(X, Y, Z):
     return torch.cat([X, Y, Z], dim=1)
 
@@ -299,43 +330,31 @@ class Project3D(nn.Module):
             offsets = []
 
             for coords, side in zip(side_coords, list(Side)):
-                # X = coords[:, 0:1, :]
-                # Y = coords[:, 1:2, :]
-                # Z = coords[:, 2:3, :]
-                #
-                # side_world_coords = world_coords[side.value]
-                #
-                # theta = torch.atan2(X, Z)
-                # phi = torch.asin(Y / torch.sqrt(X*X + Y*Y + Z*Z))
-                #
-                # out_of_range: torch.Tensor = (torch.abs(theta) > np.pi / 2) | (torch.abs(phi) > np.pi / 2)
-                # out_of_range_world_coords = side_world_coords * out_of_range
-                # mags = torch.argmax(torch.abs(out_of_range_world_coords), dim=1, keepdim=True)
-                #
-                # mag_values = torch.sign(out_of_range_world_coords).permute(0, 2, 1).gather(dim=-1, index=mags.permute(0, 2, 1)).squeeze()
-                #
-                # mags = mags.squeeze() * mag_values
-                #
-                # mags = mags.unsqueeze(dim=1)
-                # mags = mags * out_of_range
-                # 0 -> In Range, 1 -> +X -> Front, -1 -> -X -> Back, 2 -> Y -> Bottom, -2 -> -Y -> Top, 3 -> Z -> Right, -3 -> -Z -> Left
+                side_world_coords = world_coords[side.value]
 
-                # TODO can I check out of range by seeing if the mags predicted side matches the given side?
-                #   would save calculating theta and phi
+                mags = torch.argmax(torch.abs(side_world_coords), dim=1, keepdim=True)
 
+                mag_values = torch.sign(side_world_coords).permute(0, 2, 1).gather(dim=-1, index=mags.permute(0, 2, 1)).squeeze(dim=2)
+
+                mags = (mags + 1) * mag_values
+
+                # Axes: X is Right, Y is Down, Z is Forward
+                # 1 -> +X -> Right, -1 -> -X -> Left, 2 -> Y -> Bottom, -2 -> -Y -> Top, 3 -> Z -> Front, -3 -> -Z -> Back
                 # side -> mags value
-                indices = {Side.Top: -2, Side.Bottom: 2, Side.Left: -3, Side.Right: 3, Side.Front: 1, Side.Back: -1}
+                indices = {Side.Top: -2, Side.Bottom: 2, Side.Left: -1, Side.Right: 1, Side.Front: 3, Side.Back: -3}
                 sides = torch.zeros(size=(self.batch_size // 6, 1, self.height * self.width), dtype=torch.float).to(points.device) + side.value
-                # for target_side in list(Side):
-                #
-                #     if target_side is side:
-                #         continue
-                #
-                #     mask = mags == indices[target_side]
-                #     if mask.any():
-                #         sides[mask] = target_side.value
-                #         all_mask = mask.repeat(1, 3, 1)
-                #         coords[all_mask] = concat_coords(*side_to_world(*split_coords(out_of_range_world_coords), side=target_side))[all_mask]
+
+                split_world_coords = split_coords(side_world_coords)
+
+                for target_side in list(Side):
+                    if target_side is side:
+                        continue
+
+                    mask = mags == indices[target_side]
+                    if mask.any():
+                        sides[mask] = target_side.value
+                        all_mask = mask.repeat(1, 3, 1)
+                        coords[all_mask] = concat_coords(*front_to_side(*split_world_coords, side=target_side))[all_mask]
 
                 offsets.append(sides)
 
