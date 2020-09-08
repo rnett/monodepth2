@@ -170,8 +170,7 @@ class CubicConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
                  padding_mode='cubic'): #TODO not working, size differences causing errors
         self.cube_padding = padding_mode == "cubic"
-        #TODO try different values to add
-        self.amount_cube_padding = padding# + 1
+        self.amount_cube_padding = padding
 
         if self.cube_padding:
             padding_mode = "zeros"

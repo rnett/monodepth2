@@ -1,2 +1,3 @@
 city,rain,time,num_cars,num_peds,index
-Town02,Clear,Noon,*,*,0
+Town01,Clear,Noon,*,*,0
+Town01,Clear,Noon,*,*,1
