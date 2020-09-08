@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import carla_dataset
 import cv2
@@ -42,31 +42,56 @@ def sides_to_batch(top: Tensor, bottom: Tensor, left: Tensor, right: Tensor, fro
 
 
 class Side:
-    def __init__(self, x: Tensor):
+    def __init__(self, x: Optional[Tensor]):
         self.x = x
+        self.is_none = self.x is None
 
     def rot90(self) -> Side:
+        if self.is_none:
+            return Side(None)
+
         return Side(self.x.transpose(2, 3).flip(3))
 
     def rotNeg90(self) -> Side:
+        if self.is_none:
+            return Side(None)
+
         return Side(self.x.transpose(2, 3).flip(2))  # should it be flip(2, 3)?  Docs said just 3
 
     def flipVertical(self) -> Side:
+        if self.is_none:
+            return Side(None)
+
         return Side(self.x.flip(2))
 
     def flipHorizontal(self) -> Side:
+        if self.is_none:
+            return Side(None)
+
         return Side(self.x.flip(3))
 
     def left_strip(self, size) -> Side:
+        if size == 0:
+            return Side(None)
+
         return Side(self.x[:, :, :, :size])
 
     def right_strip(self, size) -> Side:
+        if size == 0:
+            return Side(None)
+
         return Side(self.x[:, :, :, -size:])
 
     def top_strip(self, size) -> Side:
+        if size == 0:
+            return Side(None)
+
         return Side(self.x[:, :, :size, :])
 
     def bottom_strip(self, size) -> Side:
+        if size == 0:
+            return Side(None)
+
         return Side(self.x[:, :, -size:, :])
 
 
@@ -122,6 +147,9 @@ def cube_pad(x: Tensor, pad_size) -> Tensor:
 
     left_size, right_size, top_size, bottom_size = get_pad_size(pad_size)
 
+    if left_size == 0 and right_size == 0 and top_size == 0 and bottom_size == 0:
+        return x
+
     padded_top = pad_side(top, back.top_strip(top_size).flipVertical(), front.top_strip(bottom_size),
                           left.top_strip(left_size).rot90(), right.top_strip(right_size).rotNeg90())
     padded_bottom = pad_side(bottom, front.bottom_strip(top_size), back.bottom_strip(bottom_size).flipVertical(),
@@ -140,10 +168,10 @@ def cube_pad(x: Tensor, pad_size) -> Tensor:
 
 class CubicConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
-                 padding_mode='zeros'): #TODO not working, size differences causing errors
+                 padding_mode='cubic'): #TODO not working, size differences causing errors
         self.cube_padding = padding_mode == "cubic"
         #TODO try different values to add
-        self.amount_cube_padding = padding + 1
+        self.amount_cube_padding = padding# + 1
 
         if self.cube_padding:
             padding_mode = "zeros"

@@ -445,17 +445,13 @@ class Trainer:
                     pix_coords,
                     align_corners=True, padding_mode="border")
 
-                # values seem correct for Front on manual inspection, output is not
-
                 # undo concating along width
-                original = color[0]
-                transformed = sampled[0]
-
-                #TODO height and width order doesn't seem to match for pinhole and cubemap (permutation is wrong for pinhole)
-                original = original.detach().cpu().permute(1, 2, 0).numpy()
-                transformed = transformed.detach().cpu().permute(1, 2, 0).numpy()
-                imwrite("/home/rnett/original.png", original)
-                imwrite("/home/rnett/transformed.png", transformed)
+                # original = color[0]
+                # transformed = sampled[0]
+                # original = original.detach().cpu().permute(1, 2, 0).numpy()
+                # transformed = transformed.detach().cpu().permute(1, 2, 0).numpy()
+                # imwrite("/home/rnett/original.png", original)
+                # imwrite("/home/rnett/transformed.png", transformed)
 
                 if self.opt.mode is Mode.Cubemap:
                     width = int(sampled.shape[1] / 6)
