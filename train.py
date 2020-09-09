@@ -6,6 +6,8 @@
 
 from __future__ import absolute_import, division, print_function
 
+import logging
+
 from trainer import Trainer
 from options import MonodepthOptions
 
@@ -14,5 +16,6 @@ opts = options.parse()
 
 
 if __name__ == "__main__":
+    logging.getLogger("imageio").setLevel(logging.ERROR)
     trainer = Trainer(opts)
     trainer.train()

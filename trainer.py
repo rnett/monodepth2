@@ -25,6 +25,8 @@ from tensorboardX import SummaryWriter
 
 import json
 
+from tqdm import tqdm, trange
+
 from carla_utils import convert_to_cubemap_batch, get_datasets, get_params
 from datasets.carla_dataset_loader import CarlaDataset
 from networks.cube_padding import CubicConv2d, sides_from_batch
@@ -173,9 +175,12 @@ class Trainer:
         self.depth_metric_names = [
             "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "da/a1", "da/a2", "da/a3"]
 
+        self.train_items = len(train_dataset)
+        self.val_items = len(val_dataset)
+
         print("Using split:\n  ", self.opt.split)
         print("There are {:d} training items and {:d} validation items\n".format(
-            len(train_dataset), len(val_dataset)))
+            self.train_items, self.val_items))
 
         self.save_opts()
 
@@ -216,7 +221,7 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.start_time = time.time()
-        for self.epoch in range(self.opt.num_epochs):
+        for self.epoch in trange(self.opt.num_epochs, desc="Epochs"):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -225,8 +230,10 @@ class Trainer:
         """Run a single epoch of training and validation
         """
 
-        print("Training")
+        # print("Training Epoch", self.step)
         self.set_train()
+
+        pbar = tqdm(total=self.train_items, desc="Batches")
 
         for batch_idx, inputs in enumerate(self.train_loader):
             if self.opt.mode is Mode.Cubemap:
@@ -257,6 +264,9 @@ class Trainer:
                 self.val()
 
             self.step += 1
+            pbar.update(self.opt.batch_size)
+
+        pbar.close()
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
@@ -373,7 +383,7 @@ class Trainer:
             inputs = self.val_iter.next()
 
         if self.opt.mode is Mode.Cubemap:
-            inputs = self.convert_to_cubemap_batch(inputs)
+            inputs = convert_to_cubemap_batch(inputs, self.opt.frame_ids, self.opt.scales)
 
         with torch.no_grad():
             outputs, losses = self.process_batch(inputs)
@@ -454,8 +464,8 @@ class Trainer:
                 # imwrite("/home/rnett/transformed.png", transformed)
 
                 if self.opt.mode is Mode.Cubemap:
-                    width = int(sampled.shape[1] / 6)
-                    sides = [sampled[:, :, width * j: width * (j + 1), :] for j in range(6)]
+                    width = sampled.shape[3] // 6
+                    sides = [sampled[:, :, :, width * j: width * (j + 1)] for j in range(6)]
                     sampled = sides_to_batch(*sides)
 
                 outputs[("color", frame_id, scale)] = sampled
@@ -504,7 +514,7 @@ class Trainer:
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
 
-                dir = Path(f"~/epoch_{self.epoch}/scale_{scale}/frame_{frame_id + 1}/").expanduser()
+                dir = Path(self.log_path) / f"epoch_{self.epoch}/scale_{scale}/frame_{frame_id + 1}"
 
                 dir.mkdir(parents=True, exist_ok=True)
 
