@@ -241,7 +241,7 @@ class Trainer:
 
             before_op_time = time.time()
 
-            outputs, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(inputs, save_images=batch_idx % 1000 == 0)
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
@@ -268,7 +268,7 @@ class Trainer:
 
         pbar.close()
 
-    def process_batch(self, inputs):
+    def process_batch(self, inputs, save_images=False):
         """Pass a minibatch through the network and generate images and losses
         """
         for key, ipt in inputs.items():
@@ -298,7 +298,7 @@ class Trainer:
             outputs.update(self.predict_poses(inputs, features))
 
         self.generate_images_pred(inputs, outputs)
-        losses = self.compute_losses(inputs, outputs)
+        losses = self.compute_losses(inputs, outputs, save_images)
 
         return outputs, losses
 
@@ -386,7 +386,7 @@ class Trainer:
             inputs = convert_to_cubemap_batch(inputs, self.opt.frame_ids, self.opt.scales)
 
         with torch.no_grad():
-            outputs, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(inputs, save_images=True)
 
             if "depth_gt" in inputs:
                 self.compute_depth_losses(inputs, outputs, losses)
@@ -485,7 +485,7 @@ class Trainer:
 
         return reprojection_loss
 
-    def compute_losses(self, inputs, outputs):
+    def compute_losses(self, inputs, outputs, save_images=False):
         """Compute the reprojection and smoothness losses for a minibatch
         """
         losses = {}
@@ -512,11 +512,12 @@ class Trainer:
 
                 dir.mkdir(parents=True, exist_ok=True)
 
-                for i in range(pred.shape[0]):
-                    p = pred[i, ...].permute(1, 2, 0)
-                    t = target[i, ...].permute(1, 2, 0)
-                    imwrite(dir / f"pred_{i}.png", p.cpu().detach())
-                    imwrite(dir / f"target_{i}.png", t.cpu().detach())
+                if save_images:
+                    for i in range(pred.shape[0]):
+                        p = pred[i, ...].permute(1, 2, 0)
+                        t = target[i, ...].permute(1, 2, 0)
+                        imwrite(dir / f"pred_{i}.png", p.cpu().detach())
+                        imwrite(dir / f"target_{i}.png", t.cpu().detach())
 
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
 
