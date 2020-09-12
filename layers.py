@@ -131,14 +131,24 @@ class Conv3x3(nn.Module):
     def __init__(self, conv_layer, in_channels, out_channels, use_refl=True):
         super(Conv3x3, self).__init__()
 
-        if use_refl:
-            self.pad = nn.ReflectionPad2d(1)
+        self.custom_padding = conv_layer is not torch.nn.Conv2d
+
+        if self.custom_padding:
+            self.conv = conv_layer(int(in_channels), int(out_channels), 3, padding=1)
         else:
-            self.pad = nn.ZeroPad2d(1)
-        self.conv = conv_layer(int(in_channels), int(out_channels), 3)
+            if use_refl:
+                self.pad = nn.ReflectionPad2d(1)
+            else:
+                self.pad = nn.ZeroPad2d(1)
+
+            self.conv = conv_layer(int(in_channels), int(out_channels), 3)
 
     def forward(self, x):
-        out = self.pad(x)
+        if self.custom_padding:
+            out = x
+        else:
+            out = self.pad(x)
+
         out = self.conv(out)
         return out
 

@@ -84,8 +84,8 @@ class Trainer:
                                                      self.get_num_ch_enc(self.models["encoder"]), self.opt.scales)
         self.store_model("depth")
 
-        if self.use_pose_net:
-            if self.opt.pose_model_type == "separate_resnet":
+        if self.use_pose_net: # true
+            if self.opt.pose_model_type == "separate_resnet": # true
                 self.models["pose_encoder"] = networks.ResnetEncoder(conv_layer,
                                                                      self.opt.num_layers,
                                                                      self.opt.weights_init == "pretrained",
@@ -110,7 +110,7 @@ class Trainer:
 
             self.store_model("pose")
 
-        if self.opt.predictive_mask:
+        if self.opt.predictive_mask: # false
             assert self.opt.disable_automasking, \
                 "When using predictive_mask, please disable automasking with --disable_automasking"
 
@@ -306,7 +306,7 @@ class Trainer:
         """Predict poses between input frames for monocular sequences.
         """
         outputs = {}
-        if self.num_pose_frames == 2:
+        if self.num_pose_frames == 2: # true
             # In this setting, we compute the pose to each source frame via a
             # separate forward pass through the pose network.
 
@@ -421,7 +421,7 @@ class Trainer:
                     T = outputs[("cam_T_cam", 0, frame_id)]
 
                 # from the authors of https://arxiv.org/abs/1712.00175
-                if self.opt.pose_model_type == "posecnn":
+                if self.opt.pose_model_type == "posecnn": # false
                     axisangle = outputs[("axisangle", 0, frame_id)]
                     translation = outputs[("translation", 0, frame_id)]
 
@@ -432,9 +432,6 @@ class Trainer:
                         axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0], frame_id < 0)
                     if self.opt.mode is Mode.Cubemap:
                         _, T = self.models["cube_pose_and_loss"](T)
-
-                # new_T = T[Side.Front.value]
-                # T = new_T.unsqueeze(0).repeat(T.shape[0], 1, 1)
 
                 cam_points = self.backproject_depth[source_scale](
                     depth, inputs[("inv_K", source_scale)])
@@ -508,9 +505,6 @@ class Trainer:
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
 
-            if self.opt.mode is Mode.Cubemap:
-                pose_losses = []
-
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
 
@@ -525,12 +519,8 @@ class Trainer:
                     imwrite(dir / f"target_{i}.png", t.cpu().detach())
 
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-                if self.opt.mode is Mode.Cubemap:
-                    pose_losses.append(outputs[("cube_pose_loss", 0, frame_id)])
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
-            if self.opt.mode is Mode.Cubemap:
-                pose_losses = torch.stack(pose_losses, 1)
 
             if not self.opt.disable_automasking:
                 identity_reprojection_losses = []
@@ -592,14 +582,19 @@ class Trainer:
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
 
-            if self.opt.mode is Mode.Cubemap:
-                # TODO add lambda factor?  optimize as hyperparam?
-                loss += pose_losses.mean()
-
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 
         total_loss /= self.num_scales
+
+        if self.opt.mode is Mode.Cubemap:
+            pose_loss = 0
+            for frame_id in self.opt.frame_ids[1:]:
+                pose_loss = pose_loss + outputs[("cube_pose_loss", 0, frame_id)]
+
+            total_loss + pose_loss * self.opt.cube_pose_loss_factor
+
+
         losses["loss"] = total_loss
         return losses
 

@@ -95,6 +95,12 @@ class MonodepthOptions:
                                  help="frames to load",
                                  default=[0, -1, 1])
 
+        # TODO optimize as hyperparam
+        self.parser.add_argument("--cube_pose_loss_factor",
+                                 help="lambda factor for cube pose loss",
+                                 type=float,
+                                 default=1)
+
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
                                  type=int,
