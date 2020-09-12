@@ -241,7 +241,7 @@ class Trainer:
 
             before_op_time = time.time()
 
-            outputs, losses = self.process_batch(inputs, save_images=batch_idx % 1000 == 0)
+            outputs, losses = self.process_batch(inputs)
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
@@ -386,7 +386,7 @@ class Trainer:
             inputs = convert_to_cubemap_batch(inputs, self.opt.frame_ids, self.opt.scales)
 
         with torch.no_grad():
-            outputs, losses = self.process_batch(inputs, save_images=True)
+            outputs, losses = self.process_batch(inputs)
 
             if "depth_gt" in inputs:
                 self.compute_depth_losses(inputs, outputs, losses)
