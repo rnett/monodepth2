@@ -590,9 +590,13 @@ class Trainer:
         if self.opt.mode is Mode.Cubemap:
             pose_loss = 0
             for frame_id in self.opt.frame_ids[1:]:
-                pose_loss = pose_loss + outputs[("cube_pose_loss", 0, frame_id)]
+                pose_loss = pose_loss + outputs[("cube_pose_loss", 0, frame_id)].mean()
 
-            total_loss + pose_loss * self.opt.cube_pose_loss_factor
+            pose_loss = pose_loss * self.opt.cube_pose_loss_factor
+
+            losses["loss/cube_pose_loss"] = pose_loss
+
+            total_loss += pose_loss
 
 
         losses["loss"] = total_loss
