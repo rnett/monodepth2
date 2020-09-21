@@ -111,7 +111,9 @@ class CubePosesAndLoss(nn.Module):
         pose = sides_to_batch(top, bottom, left, right, front, back)
 
         if self.include_loss:
-            loss = poses.std(dim=1, keepdim=False, unbiased=False).sum(1).sum(1)
+            #TODO check unbiased.  Unbiased = devide by N, biased = devide by n-1
+            #TODO using var instead of std cause std causes NaN in gradients
+            loss = poses.var(dim=1, keepdim=False, unbiased=False).sum(1).sum(1)
             return loss, pose
         else:
             return pose

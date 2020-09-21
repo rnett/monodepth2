@@ -18,6 +18,7 @@
             <excludedPath local="true" path="$PROJECT_DIR$/assets" />
             <excludedPath local="true" path="$PROJECT_DIR$/splits" />
             <excludedPath local="true" path="$PROJECT_DIR$/experiments" />
+            <excludedPath local="true" path="$PROJECT_DIR$/logs" />
           </excludedPaths>
         </serverdata>
       </paths>

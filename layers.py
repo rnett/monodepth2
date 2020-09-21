@@ -318,6 +318,8 @@ class Project3D(nn.Module):
 
         self.ones = nn.Parameter(torch.ones(self.batch_size, 1, self.height * self.width),
                                  requires_grad=False)
+        self.zeros = nn.Parameter(torch.zeros(size=(self.batch_size // 6, 1, self.height * self.width), dtype=torch.float),
+                                  requires_grad=False)
 
     def forward(self, points, K, T):
         P = T[:, :3, :]
@@ -352,7 +354,7 @@ class Project3D(nn.Module):
                 # 1 -> +X -> Right, -1 -> -X -> Left, 2 -> Y -> Bottom, -2 -> -Y -> Top, 3 -> Z -> Front, -3 -> -Z -> Back
                 # side -> mags value
                 indices = {Side.Top: -2, Side.Bottom: 2, Side.Left: -1, Side.Right: 1, Side.Front: 3, Side.Back: -3}
-                sides = torch.zeros(size=(self.batch_size // 6, 1, self.height * self.width), dtype=torch.float).to(points.device) + side.value
+                sides = self.zeros + side.value
 
                 split_world_coords = split_coords(side_world_coords)
 

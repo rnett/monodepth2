@@ -221,7 +221,7 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.start_time = time.time()
-        for self.epoch in trange(self.opt.num_epochs, desc="Epochs"):
+        for self.epoch in trange(self.opt.num_epochs, desc="Epochs", ncols=200):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -233,22 +233,24 @@ class Trainer:
         # print("Training Epoch", self.step)
         self.set_train()
 
-        pbar = tqdm(total=self.train_items, desc="Batches")
+        pbar = tqdm(total=self.train_items, desc="Batches", ncols=200)
 
         for batch_idx, inputs in enumerate(self.train_loader):
             if self.opt.mode is Mode.Cubemap:
                 inputs = convert_to_cubemap_batch(inputs, self.opt.frame_ids, self.opt.scales)
 
+            self.model_optimizer.zero_grad()
             before_op_time = time.time()
 
+            # with torch.autograd.detect_anomaly():
             outputs, losses = self.process_batch(inputs)
 
-            self.model_optimizer.zero_grad()
             losses["loss"].backward()
             self.model_optimizer.step()
             self.model_lr_scheduler.step()
 
             duration = time.time() - before_op_time
+            pbar.set_postfix_str(f"Epoch {self.epoch}, Loss: {losses['loss'].cpu().data:.6f}", refresh=True)
 
             # log less frequently after the first 2000 steps to save time & disk space
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000
@@ -438,7 +440,7 @@ class Trainer:
                 pix_coords = self.project_3d[source_scale](
                     cam_points, inputs[("K", source_scale)], T)
 
-                outputs[("sample", frame_id, scale)] = pix_coords
+                # outputs[("sample", frame_id, scale)] = pix_coords
 
                 if self.opt.mode is Mode.Cubemap:
                     color = inputs[("color", frame_id, source_scale)]
