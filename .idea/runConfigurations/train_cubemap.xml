@@ -6,7 +6,7 @@
     <envs>
       <env name="PYTHONUNBUFFERED" value="1" />
       <env name="CARLA_DOWNLOAD_LOCATION" value="/data/rnett/carla_dataset" />
-      <env name="CUDA_VISIBLE_DEVICES" value="1,2,3" />
+      <env name="CUDA_VISIBLE_DEVICES" value="2,3" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />

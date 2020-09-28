@@ -6,7 +6,11 @@ import numpy as np
 
 import torch
 from carla_dataset.config import load_csv
+from collections import OrderedDict
+
+from imageio import imsave
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from carla_utils import convert_to_cubemap_batch, get_datasets, get_params
 from datasets.carla_dataset_loader import CarlaDataset
@@ -18,7 +22,6 @@ import networks
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
-
 splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 
 # Models which were trained with stereo supervision were trained with a nominal
@@ -27,13 +30,24 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 STEREO_SCALE_FACTOR = 5.4
 
 
+def un_mod_key(key: str):
+    if key.startswith("module."):
+        return key[7:]
+    else:
+        return key
+
+
+def un_mod(weights: OrderedDict):
+    return OrderedDict([(un_mod_key(k), v) for k, v in weights.items()])
+
+
 def compute_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
     """
     thresh = np.maximum((gt / pred), (pred / gt))
-    a1 = (thresh < 1.25     ).mean()
-    a2 = (thresh < 1.25 ** 2).mean()
-    a3 = (thresh < 1.25 ** 3).mean()
+    a1 = (thresh < 1.25).float().mean()
+    a2 = (thresh < 1.25 ** 2).float().mean()
+    a3 = (thresh < 1.25 ** 3).float().mean()
 
     rmse = (gt - pred) ** 2
     rmse = np.sqrt(rmse.mean())
@@ -41,9 +55,9 @@ def compute_errors(gt, pred):
     rmse_log = (np.log(gt) - np.log(pred)) ** 2
     rmse_log = np.sqrt(rmse_log.mean())
 
-    abs_rel = np.mean(np.abs(gt - pred) / gt)
+    abs_rel = (np.abs(gt - pred) / gt).mean()
 
-    sq_rel = np.mean(((gt - pred) ** 2) / gt)
+    sq_rel = (((gt - pred) ** 2) / gt).mean()
 
     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
 
@@ -80,11 +94,11 @@ def evaluate(opt):
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
-        encoder_dict = torch.load(encoder_path)
+        encoder_dict = un_mod(torch.load(encoder_path))
 
         conv_layer, data_lambda, intrinsics = get_params(opt)
         dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
-                                 [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
+                               [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
@@ -93,7 +107,7 @@ def evaluate(opt):
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        depth_decoder.load_state_dict(torch.load(decoder_path))
+        depth_decoder.load_state_dict(un_mod(torch.load(decoder_path)))
 
         encoder.cuda()
         encoder.eval()
@@ -106,7 +120,7 @@ def evaluate(opt):
             encoder_dict['width'], encoder_dict['height']))
 
         with torch.no_grad():
-            for data in dataloader:
+            for data in tqdm(dataloader):
                 if opt.mode is Mode.Cubemap:
                     data = convert_to_cubemap_batch(data, [0], 4)
                 input_color = data[("color", 0, 0)].cuda()
@@ -178,36 +192,37 @@ def evaluate(opt):
         print("   Mono evaluation - using median scaling")
 
     gt_depth_dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
-                           [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True, load_color=False)
-    gt_depth_dataloader = DataLoader(gt_depth_dataset, 16, shuffle=False, num_workers=opt.num_workers,
-                            pin_memory=True, drop_last=False)
+                                    [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True,
+                                    load_color=False)
+    gt_depth_dataloader = DataLoader(gt_depth_dataset, 1, shuffle=False, num_workers=opt.num_workers,
+                                     pin_memory=True, drop_last=False)
 
     errors = []
     ratios = []
 
     i = 0
-    for gt_data in gt_depth_dataloader:
+    for gt_data in tqdm(gt_depth_dataloader):
         if opt.mode is Mode.Cubemap:
             gt_data = convert_to_cubemap_batch(gt_data, [0], 4, do_color=False)
 
-        gt_depth = gt_data["depth_gt"]
+        gt_depth = gt_data["depth_gt"].squeeze()
         gt_height, gt_width = gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
         pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
         pred_depth = 1 / pred_disp
 
-        if opt.eval_split == "eigen":
-            mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
-
-            crop = np.array([0.40810811 * gt_height, 0.99189189 * gt_height,
-                             0.03594771 * gt_width,  0.96405229 * gt_width]).astype(np.int32)
-            crop_mask = np.zeros(mask.shape)
-            crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = 1
-            mask = np.logical_and(mask, crop_mask)
-
-        else:
-            mask = gt_depth > 0
+        # if opt.eval_split == "eigen":
+        #     mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
+        #
+        #     crop = np.array([0.40810811 * gt_height, 0.99189189 * gt_height,
+        #                      0.03594771 * gt_width, 0.96405229 * gt_width]).astype(np.int32)
+        #     crop_mask = np.zeros(mask.shape)
+        #     crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = 1
+        #     mask = np.logical_and(mask, crop_mask)
+        #
+        # else:
+        mask = gt_depth > 0
 
         pred_depth = pred_depth[mask]
         gt_depth = gt_depth[mask]
@@ -220,6 +235,10 @@ def evaluate(opt):
 
         pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
         pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
+
+        if i % 1000 == 0:
+            imsave(f"~/imgs/{i}_gt_depth.png", gt_depth)
+            imsave(f"~/imgs/{i}_pred_depth.png", pred_depth)
 
         errors.append(compute_errors(gt_depth, pred_depth))
         i += 1

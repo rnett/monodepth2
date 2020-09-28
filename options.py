@@ -61,14 +61,14 @@ class MonodepthOptions:
         self.parser.add_argument("--png",
                                  help="if set, trains from raw KITTI png files (instead of jpgs)",
                                  action="store_true")
-        self.parser.add_argument("--height",
-                                 type=int,
-                                 help="input image height",
-                                 default=192)
-        self.parser.add_argument("--width",
-                                 type=int,
-                                 help="input image width",
-                                 default=640)
+        # self.parser.add_argument("--height",
+        #                          type=int,
+        #                          help="input image height",
+        #                          default=192)
+        # self.parser.add_argument("--width",
+        #                          type=int,
+        #                          help="input image width",
+        #                          default=640)
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -95,6 +95,13 @@ class MonodepthOptions:
                                  help="frames to load",
                                  default=[0, -1, 1])
 
+        '''
+        Need to check on tensorboard logging
+        Optimization results:
+        0.1: 2e-3
+        1: 2.17e-3, more stable
+        10: 0.02
+        '''
         # TODO optimize as hyperparam
         self.parser.add_argument("--cube_pose_loss_factor",
                                  help="lambda factor for cube pose loss",

@@ -512,9 +512,9 @@ class Trainer:
 
                 dir = Path(self.log_path) / f"epoch_{self.epoch}/scale_{scale}/frame_{frame_id + 1}"
 
-                dir.mkdir(parents=True, exist_ok=True)
 
                 if save_images:
+                    dir.mkdir(parents=True, exist_ok=True)
                     for i in range(pred.shape[0]):
                         p = pred[i, ...].permute(1, 2, 0)
                         t = target[i, ...].permute(1, 2, 0)
@@ -650,11 +650,11 @@ class Trainer:
     def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
         """
-        writer = self.writers[mode]
+        writer: SummaryWriter = self.writers[mode]
         for l, v in losses.items():
             writer.add_scalar("{}".format(l), v, self.step)
 
-        for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
+        for j in range(min(6, self.opt.batch_size)):  # write a maxmimum of six images (for cubemap support)
             for s in self.opt.scales:
                 for frame_id in self.opt.frame_ids:
                     writer.add_image(

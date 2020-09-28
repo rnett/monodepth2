@@ -161,13 +161,14 @@ class CarlaDataset(data.Dataset):
                     else:
                         inputs[("color", i, -1)] = Image.fromarray(d.color[frame + i], 'RGB')
 
+            # TODO adjust scale
             if self.load_depth:
                 if self.is_cubemap:
                     d: SplitData
                     for s in list(Side):
-                        inputs[f"{s.name.lower()}_depth_gt"] = d[s].depth[frame + i]
+                        inputs[f"{s.name.lower()}_depth_gt"] = d[s].depth[frame + i].astype('float32') / 10 # convert to meters
                 else:
-                    inputs["depth_gt"] = d.depth[frame]
+                    inputs["depth_gt"] = d.depth[frame].astype('float32') / 10 # convert to meters
 
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):

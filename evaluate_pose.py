@@ -16,6 +16,7 @@ from typing import List
 
 from carla_utils import get_params
 from datasets.carla_dataset_loader import CarlaDataset
+from evaluate_depth import un_mod
 from layers import transformation_from_parameters
 from networks.cube_poses import CubePosesAndLoss
 from utils import readlines
@@ -87,10 +88,10 @@ def evaluate(opt):
     pose_decoder_path = os.path.join(opt.load_weights_folder, "pose.pth")
 
     pose_encoder = networks.ResnetEncoder(conv_layer, opt.num_layers, False, 2)
-    pose_encoder.load_state_dict(torch.load(pose_encoder_path))
+    pose_encoder.load_state_dict(un_mod(torch.load(pose_encoder_path)))
 
     pose_decoder = networks.PoseDecoder(conv_layer, pose_encoder.num_ch_enc, 1, 2)
-    pose_decoder.load_state_dict(torch.load(pose_decoder_path))
+    pose_decoder.load_state_dict(un_mod(torch.load(pose_decoder_path)))
 
     if opt.mode is Mode.Cubemap:
         cube_poses = CubePosesAndLoss(include_loss=False)
