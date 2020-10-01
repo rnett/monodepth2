@@ -84,15 +84,13 @@ class Trainer:
                                                      self.get_num_ch_enc(self.models["encoder"]), self.opt.scales)
         self.store_model("depth")
 
-        if self.use_pose_net: # true
-            if self.opt.pose_model_type == "separate_resnet": # true
+        if self.use_pose_net:  # true
+            if self.opt.pose_model_type == "separate_resnet":  # true
                 self.models["pose_encoder"] = networks.ResnetEncoder(conv_layer,
                                                                      self.opt.num_layers,
                                                                      self.opt.weights_init == "pretrained",
                                                                      num_input_images=self.num_pose_frames)
                 self.store_model("pose_encoder")
-
-                self.models["pose_encoder"].to(self.device)
 
                 self.models["pose"] = networks.PoseDecoder(conv_layer,
                                                            self.get_num_ch_enc(self.models["pose_encoder"]),
@@ -106,11 +104,12 @@ class Trainer:
 
             elif self.opt.pose_model_type == "posecnn":
                 self.models["pose"] = networks.PoseCNN(conv_layer,
-                                                       self.num_input_frames if self.opt.pose_model_input == "all" else 2)
+                                                       self.num_input_frames if self.opt.pose_model_input == "all"
+                                                       else 2)
 
             self.store_model("pose")
 
-        if self.opt.predictive_mask: # false
+        if self.opt.predictive_mask:  # false
             assert self.opt.disable_automasking, \
                 "When using predictive_mask, please disable automasking with --disable_automasking"
 
@@ -236,10 +235,11 @@ class Trainer:
         pbar = tqdm(total=self.train_items, desc="Batches", ncols=200)
 
         for batch_idx, inputs in enumerate(self.train_loader):
+            self.model_optimizer.zero_grad()
+
             if self.opt.mode is Mode.Cubemap:
                 inputs = convert_to_cubemap_batch(inputs, self.opt.frame_ids, self.opt.scales)
 
-            self.model_optimizer.zero_grad()
             before_op_time = time.time()
 
             # with torch.autograd.detect_anomaly():
@@ -308,7 +308,7 @@ class Trainer:
         """Predict poses between input frames for monocular sequences.
         """
         outputs = {}
-        if self.num_pose_frames == 2: # true
+        if self.num_pose_frames == 2:  # true
             # In this setting, we compute the pose to each source frame via a
             # separate forward pass through the pose network.
 
@@ -377,6 +377,7 @@ class Trainer:
     def val(self):
         """Validate the model on a single minibatch
         """
+        # TODO could have something to do with the swap here
         self.set_eval()
         try:
             inputs = self.val_iter.next()
@@ -423,7 +424,7 @@ class Trainer:
                     T = outputs[("cam_T_cam", 0, frame_id)]
 
                 # from the authors of https://arxiv.org/abs/1712.00175
-                if self.opt.pose_model_type == "posecnn": # false
+                if self.opt.pose_model_type == "posecnn":  # false
                     axisangle = outputs[("axisangle", 0, frame_id)]
                     translation = outputs[("translation", 0, frame_id)]
 
@@ -512,7 +513,6 @@ class Trainer:
 
                 dir = Path(self.log_path) / f"epoch_{self.epoch}/scale_{scale}/frame_{frame_id + 1}"
 
-
                 if save_images:
                     dir.mkdir(parents=True, exist_ok=True)
                     for i in range(pred.shape[0]):
@@ -600,7 +600,6 @@ class Trainer:
             losses["loss/cube_pose_loss"] = pose_loss
 
             total_loss += pose_loss
-
 
         losses["loss"] = total_loss
         return losses

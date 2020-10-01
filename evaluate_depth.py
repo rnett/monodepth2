@@ -9,6 +9,7 @@ from carla_dataset.config import load_csv
 from collections import OrderedDict
 
 from imageio import imsave
+from pathlib import Path
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -205,12 +206,12 @@ def evaluate(opt):
         if opt.mode is Mode.Cubemap:
             gt_data = convert_to_cubemap_batch(gt_data, [0], 4, do_color=False)
 
-        gt_depth = gt_data["depth_gt"].squeeze()
-        gt_height, gt_width = gt_depth.shape[:2]
+        all_gt_depth = gt_data["depth_gt"].squeeze()
+        gt_height, gt_width = all_gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
         pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
-        pred_depth = 1 / pred_disp
+        all_pred_depth = 1 / pred_disp
 
         # if opt.eval_split == "eigen":
         #     mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
@@ -222,23 +223,33 @@ def evaluate(opt):
         #     mask = np.logical_and(mask, crop_mask)
         #
         # else:
-        mask = gt_depth > 0
+        mask = all_gt_depth > 0
 
-        pred_depth = pred_depth[mask]
-        gt_depth = gt_depth[mask]
+        pred_depth = all_pred_depth[mask]
+        gt_depth = all_gt_depth[mask]
+
+        all_gt_depth[mask] = 0
+        all_pred_depth[mask] = 0
 
         pred_depth *= opt.pred_depth_scale_factor
+        all_pred_depth *= opt.pred_depth_scale_factor
         if not opt.disable_median_scaling:
             ratio = np.median(gt_depth) / np.median(pred_depth)
             ratios.append(ratio)
             pred_depth *= ratio
+            all_pred_depth *= ratio
 
         pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
         pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
 
+        all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
+        all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
+
         if i % 1000 == 0:
-            imsave(f"~/imgs/{i}_gt_depth.png", gt_depth)
-            imsave(f"~/imgs/{i}_pred_depth.png", pred_depth)
+            if not Path("~/imgs").exists():
+                Path("~/imgs").mkdir(parents=True, exist_ok=True)
+            imsave(f"~/imgs/{i}_gt_depth.png", all_gt_depth.cpu().numpy())
+            imsave(f"~/imgs/{i}_pred_depth.png", all_pred_depth)
 
         errors.append(compute_errors(gt_depth, pred_depth))
         i += 1

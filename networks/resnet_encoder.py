@@ -23,17 +23,17 @@ class ResNetMultiImageInput(ResNet):
     Adapted from https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
     """
     def __init__(self, conv_layer, block, layers, num_classes=1000, num_input_images=1):
-        super(ResNetMultiImageInput, self).__init__(block, conv_layer, layers)
+        super(ResNetMultiImageInput, self).__init__(conv_layer, block, layers)
         self.inplanes = 64
         self.conv1 = conv_layer(
             num_input_images * 3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, conv_layer, 64, layers[0])
-        self.layer2 = self._make_layer(block, conv_layer, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, conv_layer, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, conv_layer, 512, layers[3], stride=2)
+        self.layer1 = self._make_layer(conv_layer, block, 64, layers[0])
+        self.layer2 = self._make_layer(conv_layer, block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(conv_layer, block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(conv_layer, block, 512, layers[3], stride=2)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

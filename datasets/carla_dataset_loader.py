@@ -43,15 +43,19 @@ class CarlaDataset(data.Dataset):
 
         self.is_cubemap = is_cubemap
 
+        # TODO multiplier of offsets in frame_idxs
+        self.frame_multiplier = 1
+
+        # TODO currently using every other frame
         for c in configs:
             s: DataSource = get_source(c)
             with s as d:
-                frames = (d.color.shape[0] - 2)
+                frames = (d.color.shape[0] - 2 * self.frame_multiplier)
             for j in range(frames):
                 if self.is_cubemap:
-                    self.sources.append((c.pinhole_data, j + 1))
+                    self.sources.append((c.pinhole_data, j + self.frame_multiplier))
                 else:
-                    self.sources.append((s, j + 1))
+                    self.sources.append((s, j + self.frame_multiplier))
 
         self.height = intrinsics.height
         self.width = intrinsics.width
@@ -113,6 +117,7 @@ class CarlaDataset(data.Dataset):
     def __len__(self):
         return len(self.sources)
 
+    # TODO cache loaded ndarray (from hdf5 files)?
     def __getitem__(self, index):
         """Returns a single training item from the dataset as a dictionary.
 
@@ -154,14 +159,14 @@ class CarlaDataset(data.Dataset):
         with source as d:
             if self.load_color:
                 for i in self.frame_idxs:
+                    offset = i * self.frame_multiplier
                     if self.is_cubemap:
                         d: SplitData
                         for s in list(Side):
-                            inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(crop_pinhole_to_90(d[s].color[frame + i]), 'RGB')
+                            inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(crop_pinhole_to_90(d[s].color[frame + offset]), 'RGB')
                     else:
-                        inputs[("color", i, -1)] = Image.fromarray(d.color[frame + i], 'RGB')
+                        inputs[("color", i, -1)] = Image.fromarray(d.color[frame + offset], 'RGB')
 
-            # TODO adjust scale
             if self.load_depth:
                 if self.is_cubemap:
                     d: SplitData
