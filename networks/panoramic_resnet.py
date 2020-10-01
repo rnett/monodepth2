@@ -219,7 +219,7 @@ class ResNet(nn.Module):
         return self._forward_impl(x)
 
 
-def _resnet(arch, conv_layer, block, layers, pretrained, progress, **kwargs):
+def _resnet(conv_layer, arch, block, layers, pretrained, progress, **kwargs):
     model = ResNet(conv_layer, block, layers, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls[arch],
