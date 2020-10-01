@@ -453,7 +453,7 @@ class Trainer:
                 sampled = F.grid_sample(
                     color,
                     pix_coords,
-                    align_corners=True, padding_mode="border")
+                    padding_mode="border")
 
                 # undo concating along width
                 # original = color[0]
