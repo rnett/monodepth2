@@ -234,6 +234,7 @@ class Trainer:
 
         pbar = tqdm(total=self.train_items, desc="Batches", ncols=200)
 
+        batches = len(self.train_loader)
         for batch_idx, inputs in enumerate(self.train_loader):
             self.model_optimizer.zero_grad()
 
@@ -243,11 +244,10 @@ class Trainer:
             before_op_time = time.time()
 
             # with torch.autograd.detect_anomaly():
-            outputs, losses = self.process_batch(inputs)
+            outputs, losses = self.process_batch(inputs, batch_idx == batches - 1)
 
             losses["loss"].backward()
             self.model_optimizer.step()
-            self.model_lr_scheduler.step()
 
             duration = time.time() - before_op_time
             pbar.set_postfix_str(f"Epoch {self.epoch}, Loss: {losses['loss'].cpu().data:.6f}", refresh=True)
@@ -269,6 +269,7 @@ class Trainer:
             pbar.update(self.opt.batch_size)
 
         pbar.close()
+        self.model_lr_scheduler.step()
 
     def process_batch(self, inputs, save_images=False):
         """Pass a minibatch through the network and generate images and losses
@@ -491,6 +492,7 @@ class Trainer:
     def compute_losses(self, inputs, outputs, save_images=False):
         """Compute the reprojection and smoothness losses for a minibatch
         """
+
         losses = {}
         total_loss = 0
 
@@ -511,15 +513,20 @@ class Trainer:
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
 
-                dir = Path(self.log_path) / f"epoch_{self.epoch}/scale_{scale}/frame_{frame_id + 1}"
+                dir = Path(self.log_path) / f"epoch_{self.epoch}/scale_{scale}/frame_{frame_id}"
 
                 if save_images:
+                    original = inputs[("color", frame_id, source_scale)]
+                    original_aug = inputs[("color_aug", frame_id, source_scale)]
                     dir.mkdir(parents=True, exist_ok=True)
-                    for i in range(pred.shape[0]):
-                        p = pred[i, ...].permute(1, 2, 0)
-                        t = target[i, ...].permute(1, 2, 0)
-                        imwrite(dir / f"pred_{i}.png", p.cpu().detach())
-                        imwrite(dir / f"target_{i}.png", t.cpu().detach())
+                    p = pred[0, ...].permute(1, 2, 0) * 256
+                    t = target[0, ...].permute(1, 2, 0) * 256
+                    o = original[0, ...].permute(1, 2, 0) * 256
+                    oa = original_aug[0, ...].permute(1, 2, 0) * 256
+                    imwrite(dir / f"pred.png", p.cpu().detach().numpy())
+                    imwrite(dir / f"target.png", t.cpu().detach().numpy())
+                    imwrite(dir / f"original.png", o.cpu().detach().numpy())
+                    imwrite(dir / f"original_aug.png", oa.cpu().detach().numpy())
 
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
 
@@ -587,6 +594,9 @@ class Trainer:
 
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
+
+        # if save_images:
+        #     print()
 
         total_loss /= self.num_scales
 
