@@ -46,9 +46,9 @@ def compute_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
     """
     thresh = np.maximum((gt / pred), (pred / gt))
-    a1 = (thresh < 1.25).float().mean()
-    a2 = (thresh < 1.25 ** 2).float().mean()
-    a3 = (thresh < 1.25 ** 3).float().mean()
+    a1 = (thresh < 1.25).astype('float32').mean()
+    a2 = (thresh < 1.25 ** 2).astype('float32').mean()
+    a3 = (thresh < 1.25 ** 3).astype('float32').mean()
 
     rmse = (gt - pred) ** 2
     rmse = np.sqrt(rmse.mean())
@@ -206,7 +206,7 @@ def evaluate(opt):
         if opt.mode is Mode.Cubemap:
             gt_data = convert_to_cubemap_batch(gt_data, [0], 4, do_color=False)
 
-        all_gt_depth = gt_data["depth_gt"].squeeze()
+        all_gt_depth = gt_data["depth_gt"].squeeze().numpy()
         gt_height, gt_width = all_gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
@@ -246,9 +246,9 @@ def evaluate(opt):
         all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
 
         if i % 1000 == 0:
-            if not Path("~/imgs").exists():
-                Path("~/imgs").mkdir(parents=True, exist_ok=True)
-            imsave(f"~/imgs/{i}_gt_depth.png", all_gt_depth.cpu().numpy())
+            if not Path("~/imgs/").exists():
+                Path("~/imgs/").mkdir(exist_ok=True)
+            imsave(f"~/imgs/{i}_gt_depth.png", all_gt_depth)
             imsave(f"~/imgs/{i}_pred_depth.png", all_pred_depth)
 
         errors.append(compute_errors(gt_depth, pred_depth))
