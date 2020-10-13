@@ -323,20 +323,6 @@ class Project3D(nn.Module):
 
     def forward(self, points, K, T):
 
-        # TODO this is the old monodepth2 code, try with this
-        # if self.mode is Mode.Pinhole:
-        #     P = torch.matmul(K, T)[:, :3, :]
-        #
-        #     cam_points = torch.matmul(P, points)
-        #
-        #     pix_coords = cam_points[:, :2, :] / (cam_points[:, 2, :].unsqueeze(1) + self.eps)
-        #     pix_coords = pix_coords.view(self.batch_size, 2, self.height, self.width)
-        #     pix_coords = pix_coords.permute(0, 2, 3, 1)
-        #     pix_coords[..., 0] /= self.width - 1
-        #     pix_coords[..., 1] /= self.height - 1
-        #     pix_coords = (pix_coords - 0.5) * 2
-        #     return pix_coords
-
         P = T[:, :3, :]
 
         # poses are already side-pov

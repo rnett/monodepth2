@@ -2,7 +2,9 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import cv2
+import logging
 import numpy as np
+import shutil
 
 import torch
 from carla_dataset.config import load_csv
@@ -75,6 +77,7 @@ def batch_post_process_disparity(l_disp, r_disp):
 
 
 def evaluate(opt):
+    logging.getLogger("imageio").setLevel(logging.ERROR)
     """Evaluates a pretrained model using a specified test set
     """
     MIN_DEPTH = 1e-3
@@ -99,7 +102,7 @@ def evaluate(opt):
 
         conv_layer, data_lambda, intrinsics = get_params(opt)
         dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
-                               [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
+                               [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
@@ -193,13 +196,16 @@ def evaluate(opt):
         print("   Mono evaluation - using median scaling")
 
     gt_depth_dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
-                                    [0], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True,
+                                    [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True,
                                     load_color=False)
     gt_depth_dataloader = DataLoader(gt_depth_dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                      pin_memory=True, drop_last=False)
 
     errors = []
     ratios = []
+
+    if Path("~/imgs/").exists():
+        shutil.rmtree("~/imgs/", ignore_errors=True)
 
     i = 0
     for gt_data in tqdm(gt_depth_dataloader):
@@ -223,13 +229,15 @@ def evaluate(opt):
         #     mask = np.logical_and(mask, crop_mask)
         #
         # else:
-        mask = all_gt_depth > 0
+        #     mask = all_gt_depth > 0
+
+        mask = np.logical_and(all_gt_depth > MIN_DEPTH, all_gt_depth < MAX_DEPTH)
 
         pred_depth = all_pred_depth[mask]
         gt_depth = all_gt_depth[mask]
 
-        all_gt_depth[mask] = 0
-        all_pred_depth[mask] = 0
+        all_gt_depth[np.logical_not(mask)] = 0
+        all_pred_depth[np.logical_not(mask)] = 0
 
         pred_depth *= opt.pred_depth_scale_factor
         all_pred_depth *= opt.pred_depth_scale_factor
@@ -245,9 +253,15 @@ def evaluate(opt):
         all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
         all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
 
-        if i % 1000 == 0:
+        if i % 500 == 0:
             if not Path("~/imgs/").exists():
                 Path("~/imgs/").mkdir(exist_ok=True)
+
+            # gt_max = np.nanmax(all_gt_depth)
+            # pred_max = np.nanmax(all_pred_depth)
+            # print(gt_max, pred_max)
+            all_gt_depth = 256 * all_gt_depth / np.nanmax(all_gt_depth)
+            all_pred_depth = 256 * all_pred_depth / np.nanmax(all_pred_depth)
             imsave(f"~/imgs/{i}_gt_depth.png", all_gt_depth)
             imsave(f"~/imgs/{i}_pred_depth.png", all_pred_depth)
 
