@@ -51,6 +51,8 @@ def compute_errors(gt, pred):
     a1 = (thresh < 1.25).astype('float32').mean()
     a2 = (thresh < 1.25 ** 2).astype('float32').mean()
     a3 = (thresh < 1.25 ** 3).astype('float32').mean()
+    a4 = (thresh < 1.25 ** 4).astype('float32').mean()
+    a5 = (thresh < 1.25 ** 5).astype('float32').mean()
 
     rmse = (gt - pred) ** 2
     rmse = np.sqrt(rmse.mean())
@@ -62,7 +64,7 @@ def compute_errors(gt, pred):
 
     sq_rel = (((gt - pred) ** 2) / gt).mean()
 
-    return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
+    return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3, a4, a5
 
 
 def batch_post_process_disparity(l_disp, r_disp):
@@ -275,8 +277,8 @@ def evaluate(opt):
 
     mean_errors = np.array(errors).mean(0)
 
-    print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
-    print(("&{: 8.3f}  " * 7).format(*mean_errors.tolist()) + "\\\\")
+    print("\n  " + ("{:>8} | " * 9).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3", "a4", "a5"))
+    print(("&{: 8.3f}  " * 9).format(*mean_errors.tolist()) + "\\\\")
     print("\n-> Done!")
 
 

@@ -6,6 +6,7 @@
 
 from __future__ import absolute_import, division, print_function
 
+import sys
 from pathlib import Path
 
 import carla_dataset
@@ -46,6 +47,8 @@ class Trainer:
     def __init__(self, options):
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
+
+        (Path(self.log_path) / "command").open('w').write(" ".join(sys.argv))
 
         # checking height and width are multiples of 32
         # assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"

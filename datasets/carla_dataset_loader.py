@@ -171,7 +171,7 @@ class CarlaDataset(data.Dataset):
                 if self.is_cubemap:
                     d: SplitData
                     for s in list(Side):
-                        inputs[f"{s.name.lower()}_depth_gt"] = d[s].depth[frame + i].astype('float32') / 10 # convert to meters
+                        inputs[f"{s.name.lower()}_depth_gt"] = d[s].depth[frame].astype('float32') / 10 # convert to meters
                 else:
                     inputs["depth_gt"] = d.depth[frame].astype('float32') / 10 # convert to meters
 
