@@ -9,12 +9,18 @@ from torch import nn
 class CylindricalConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
                  padding_mode='cylindrical'):
+        self.cylindrical_padding = padding_mode == "cylindrical" and padding > 0
+        self.amount_cylindrical_padding = padding
+
+        if self.cylindrical_padding:
+            padding_mode = "zeros"
+            padding = 0
+
         super().__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if self.padding_mode == "cylindrical":
-            wrap_padding = [k-1 for k in self.kernel_size]
-            wrapped_inputs = wrap_pad(input, wrap_padding)
+        if self.cylindrical_padding:
+            wrapped_inputs = wrap_pad(input, self.amount_cylindrical_padding)
             return super().forward(wrapped_inputs)
         else:
             return super().forward(input)
@@ -41,16 +47,11 @@ def wrap_pad(tensor: torch.Tensor, wrap_padding, axis=(2, 3)):
     elif isinstance(wrap_padding, int):
         wrapping = padding = wrap_padding
 
-    # set padding dimensions
-    paddings = [[0, 0]] * rank
-    paddings[axis[0]] = [floor(padding/2), ceil(padding/2)]
-
-    return F.pad(wrap(tensor, wrapping, axis=axis[1]), paddings, mode='CONSTANT')
+    return F.pad(wrap(tensor, wrapping, axis=axis[1]), [0, 0, padding, padding], mode='CONSTANT')
 
 
 def wrap(tensor: torch.Tensor, wrapping, axis=2):
     """Wrap cylindrically, appending evenly to both sides.
-    For odd wrapping amounts, the extra column is appended to the [-1] side.
     """
     rank = tensor.ndimension()
     if axis >= rank:
@@ -58,8 +59,8 @@ def wrap(tensor: torch.Tensor, wrapping, axis=2):
                 "Invalid axis for rank-{} tensor (axis={})".format(rank, axis)
               )
 
-    rpad = tensor.narrow(axis, 0, ceil(wrapping/2))
-    lpad = tensor.narrow(axis, tensor.shape[axis] - floor(wrapping/2), floor(wrapping/2))
+    rpad = tensor.narrow(axis, 0, wrapping)
+    lpad = tensor.narrow(axis, tensor.shape[axis] - wrapping, wrapping)
 
     return torch.cat([lpad, tensor, rpad], dim=axis)
 

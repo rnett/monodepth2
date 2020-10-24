@@ -168,8 +168,8 @@ def cube_pad(x: Tensor, pad_size) -> Tensor:
 
 class CubicConv2d(nn.Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
-                 padding_mode='cubic'): #TODO not working, size differences causing errors
-        self.cube_padding = padding_mode == "cubic"
+                 padding_mode='cubic'):
+        self.cube_padding = padding_mode == "cubic" and padding > 0
         self.amount_cube_padding = padding
 
         if self.cube_padding:
