@@ -47,7 +47,7 @@ def wrap_pad(tensor: torch.Tensor, wrap_padding, axis=(2, 3)):
     elif isinstance(wrap_padding, int):
         wrapping = padding = wrap_padding
 
-    return F.pad(wrap(tensor, wrapping, axis=axis[1]), [0, 0, padding, padding], mode='CONSTANT')
+    return F.pad(wrap(tensor, wrapping, axis=axis[1]), [0, 0, padding, padding], mode='constant')
 
 
 def wrap(tensor: torch.Tensor, wrapping, axis=2):
