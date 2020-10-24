@@ -1,6 +1,7 @@
 import random
 from typing import List, Callable, Any, Dict
 
+import cv2
 from PIL import Image
 import numpy as np
 import torch
@@ -35,7 +36,9 @@ class CarlaDataset(data.Dataset):
                  is_cubemap=False,
                  is_train=False,
                  load_depth=False,
-                 load_color=True):
+                 load_color=True,
+                 height=None,
+                 width=None):
         super(data.Dataset, self).__init__()
 
         # index -> (source to use, index in source)
@@ -57,8 +60,8 @@ class CarlaDataset(data.Dataset):
                 else:
                     self.sources.append((s, j + self.frame_multiplier))
 
-        self.height = intrinsics.height
-        self.width = intrinsics.width
+        self.height = height or intrinsics.height
+        self.width = width or intrinsics.width
         self.frame_idxs = frame_idxs
         self.num_scales = num_scales
         self.interp = Image.ANTIALIAS
@@ -90,6 +93,7 @@ class CarlaDataset(data.Dataset):
         self.load_depth = load_depth
         self.load_color = load_color
 
+        self.intrinsics = intrinsics
         self.K = intrinsics.normalized_K
 
     def preprocess(self, inputs, color_aug):
@@ -116,6 +120,12 @@ class CarlaDataset(data.Dataset):
 
     def __len__(self):
         return len(self.sources)
+
+    def resize_img(self, img):
+        if self.width == self.intrinsics.width and self.height == self.intrinsics.height:
+            return img
+        else:
+            return cv2.resize(img, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
 
     # TODO cache loaded ndarray (from hdf5 files)?
     def __getitem__(self, index):
@@ -163,17 +173,17 @@ class CarlaDataset(data.Dataset):
                     if self.is_cubemap:
                         d: SplitData
                         for s in list(Side):
-                            inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(crop_pinhole_to_90(d[s].color[frame + offset]), 'RGB')
+                            inputs[(f"{s.name.lower()}_color", i, -1)] = Image.fromarray(self.resize_img(crop_pinhole_to_90(d[s].color[frame + offset])), 'RGB')
                     else:
-                        inputs[("color", i, -1)] = Image.fromarray(d.color[frame + offset], 'RGB')
+                        inputs[("color", i, -1)] = Image.fromarray(self.resize_img(d.color[frame + offset]), 'RGB')
 
             if self.load_depth:
                 if self.is_cubemap:
                     d: SplitData
                     for s in list(Side):
-                        inputs[f"{s.name.lower()}_depth_gt"] = d[s].depth[frame].astype('float32') / 10 # convert to meters
+                        inputs[f"{s.name.lower()}_depth_gt"] = self.resize_img(d[s].depth[frame].astype('float32') / 10) # convert to meters
                 else:
-                    inputs["depth_gt"] = d.depth[frame].astype('float32') / 10 # convert to meters
+                    inputs["depth_gt"] = self.resize_img(d.depth[frame].astype('float32') / 10) # convert to meters
 
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):

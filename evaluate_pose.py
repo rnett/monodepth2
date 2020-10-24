@@ -80,7 +80,7 @@ def evaluate(opt):
     conv_layer, data_lambda, intrinsics = get_params(opt)
     configs = load_csv(opt.test_data)
     dataset = CarlaDataset(configs, data_lambda, intrinsics,
-                           [0, 1], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
+                           [0, 1], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, width=opt.width, height=opt.height)
     dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                             pin_memory=True, drop_last=False)
 

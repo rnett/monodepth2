@@ -48,7 +48,8 @@ class Trainer:
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
-        (Path(self.log_path) / "command").open('w').write(" ".join(sys.argv))
+        Path(self.log_path).mkdir(exist_ok=True, parents=True)
+        (Path(self.log_path) / "command").open('w+').write(" ".join(sys.argv))
 
         # checking height and width are multiples of 32
         # assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
@@ -516,7 +517,7 @@ class Trainer:
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
 
-                dir = Path(self.log_path) / f"epoch_{self.epoch}/scale_{scale}/frame_{frame_id}"
+                dir = Path(self.log_path) / f"images/epoch_{self.epoch}/scale_{scale}/frame_{frame_id}"
 
                 if save_images:
                     original = inputs[("color", frame_id, source_scale)]

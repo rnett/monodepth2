@@ -12,10 +12,10 @@ from options import Mode
 
 def get_datasets(options, data_lambda, intrinsics):
     train_dataset = CarlaDataset(load_csv(options.train_data), data_lambda, intrinsics,
-                                 options.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap)
+                                 options.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap, width=options.width, height=options.height)
 
     val_dataset = CarlaDataset(load_csv(options.val_data), data_lambda, intrinsics,
-                               options.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap)
+                               options.frame_ids, 4, is_train=True, is_cubemap=options.mode is Mode.Cubemap, width=options.width, height=options.height)
 
     return train_dataset, val_dataset
 

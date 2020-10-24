@@ -58,44 +58,19 @@ def wrap(tensor: torch.Tensor, wrapping, axis=2):
                 "Invalid axis for rank-{} tensor (axis={})".format(rank, axis)
               )
 
-    sizes = [-1] * rank
-
-    sizes[axis] = ceil(wrapping/2)
-    rstarts = [0]*rank
-
-    rpad = tensor
-    for i, start, size in zip(range(len(rstarts)), rstarts, sizes):
-        rpad = rpad.narrow(i, start, size)
-
-    sizes[axis] = floor(wrapping/2)
-    lstarts = [0]*rank
-    lstarts[axis] = tensor.shape[axis] - floor(wrapping/2)
-
-    lpad = tensor
-    for i, start, size in zip(range(len(lstarts)), lstarts, sizes):
-        lpad = rpad.narrow(i, start, size)
+    rpad = tensor.narrow(axis, 0, ceil(wrapping/2))
+    lpad = tensor.narrow(axis, tensor.shape[axis] - floor(wrapping/2), floor(wrapping/2))
 
     return torch.cat([lpad, tensor, rpad], dim=axis)
 
-def unwrap(tensor, wrapping, axis=2):
+def unwrap(tensor: torch.Tensor, wrapping, axis=2):
     """Removes wrapping from an image.
     For odd wrapping amounts, this assumes an extra column on the [-1] side.
     """
-    rank = tensor.shape.ndims
+    rank = tensor.ndimension()
     if axis >= rank:
         raise ValueError(
                 "Invalid axis for rank-{} tensor (axis={})".format(rank, axis)
               )
 
-    sizes = [-1] * rank
-    sizes[axis] = tensor.shape.as_list()[axis] - wrapping
-
-    starts = [0] * rank
-    starts[axis] = floor(wrapping/2)
-
-
-    for i, start, size in zip(range(len(starts)), starts, sizes):
-        tensor = tensor.narrow(i, start, size)
-
-    return tensor
-    #return tensor[:,:,1:-1,:]
+    return tensor.narrow(axis, floor(wrapping/2), tensor.shape[axis] - wrapping)

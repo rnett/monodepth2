@@ -61,14 +61,14 @@ class MonodepthOptions:
         self.parser.add_argument("--png",
                                  help="if set, trains from raw KITTI png files (instead of jpgs)",
                                  action="store_true")
-        # self.parser.add_argument("--height",
-        #                          type=int,
-        #                          help="input image height",
-        #                          default=192)
-        # self.parser.add_argument("--width",
-        #                          type=int,
-        #                          help="input image width",
-        #                          default=640)
+        self.parser.add_argument("--height",
+                                 type=int,
+                                 help="input image height",
+                                 default=None)
+        self.parser.add_argument("--width",
+                                 type=int,
+                                 help="input image width",
+                                 default=None)
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -120,11 +120,11 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=40)
+                                 default=20)
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=30)
+                                 default=15)
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",
@@ -188,6 +188,9 @@ class MonodepthOptions:
                                  default=1)
 
         # EVALUATION options
+        self.parser.add_argument("--eval_model",
+                                 help="log dir of model to eval.  Uses last epoch",
+                                 type=str)
         self.parser.add_argument("--eval_stereo",
                                  help="if set evaluates in stereo mode",
                                  action="store_true")

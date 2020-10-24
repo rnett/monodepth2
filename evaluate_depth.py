@@ -78,6 +78,27 @@ def batch_post_process_disparity(l_disp, r_disp):
     return r_mask * l_disp + l_mask * r_disp + (1.0 - l_mask - r_mask) * m_disp
 
 
+def gray2rgb(im, cmap='gray'):
+    import matplotlib
+    matplotlib.use('agg')
+    import matplotlib.pyplot as plt  # doesn't work in docker
+    cmap = plt.get_cmap(cmap)
+    rgba_img = cmap(im.astype(np.float32))
+    rgb_img = np.delete(rgba_img, 3, 2)
+    return rgb_img
+
+
+def normalize_depth_for_display(depth, cmap='plasma'):
+    depth = depth / np.nanmax(depth)
+    depth = gray2rgb(depth, cmap=cmap)
+    return (depth) * 255
+
+
+def save_depth_image(path, img):
+    depth = normalize_depth_for_display(img)
+    imsave(path, depth)
+
+
 def evaluate(opt):
     logging.getLogger("imageio").setLevel(logging.ERROR)
     """Evaluates a pretrained model using a specified test set
@@ -90,7 +111,17 @@ def evaluate(opt):
 
     if opt.ext_disp_to_eval is None:
 
-        opt.load_weights_folder = os.path.expanduser(opt.load_weights_folder)
+        if opt.eval_model is None:
+            opt.load_weights_folder = os.path.expanduser(opt.load_weights_folder)
+        else:
+            if opt.load_weights_folder is not None:
+                raise ValueError("Can't specify eval_model and load_weights_folder, they conflict")
+
+            opt.eval_model = Path(opt.eval_model)
+            models = Path(opt.eval_model) / "models"
+            weights = [p for p in models.iterdir() if p.name.startswith("weights")]
+            weights = [int(p.name.split("_")[1]) for p in weights]
+            opt.load_weights_folder = models / f"weights_{max(weights)}"
 
         assert os.path.isdir(opt.load_weights_folder), \
             "Cannot find a folder at {}".format(opt.load_weights_folder)
@@ -104,7 +135,7 @@ def evaluate(opt):
 
         conv_layer, data_lambda, intrinsics = get_params(opt)
         dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
-                               [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap)
+                               [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, width=opt.width, height=opt.height)
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
@@ -149,16 +180,7 @@ def evaluate(opt):
         pred_disps = np.concatenate(pred_disps)
 
     else:
-        conv_layer, data_lambda, intrinsics = get_params(opt)
-        # Load predictions from file
-        print("-> Loading predictions from {}".format(opt.ext_disp_to_eval))
-        pred_disps = np.load(opt.ext_disp_to_eval)
-
-        if opt.eval_eigen_to_benchmark:
-            eigen_to_benchmark_ids = np.load(
-                os.path.join(splits_dir, "benchmark", "eigen_to_benchmark_ids.npy"))
-
-            pred_disps = pred_disps[eigen_to_benchmark_ids]
+        raise ValueError("Not supported for carla")
 
     if opt.save_pred_disps:
         output_path = os.path.join(
@@ -171,43 +193,31 @@ def evaluate(opt):
         quit()
 
     elif opt.eval_split == 'benchmark':
-        save_dir = os.path.join(opt.load_weights_folder, "benchmark_predictions")
-        print("-> Saving out benchmark predictions to {}".format(save_dir))
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-
-        for idx in range(len(pred_disps)):
-            disp_resized = cv2.resize(pred_disps[idx], (1216, 352))
-            depth = STEREO_SCALE_FACTOR / disp_resized
-            depth = np.clip(depth, 0, 80)
-            depth = np.uint16(depth * 256)
-            save_path = os.path.join(save_dir, "{:010d}.png".format(idx))
-            cv2.imwrite(save_path, depth)
-
-        print("-> No ground truth is available for the KITTI benchmark, so not evaluating. Done.")
-        quit()
+        raise ValueError("Not supported for carla")
 
     print("-> Evaluating")
 
     if opt.eval_stereo:
-        print("   Stereo evaluation - "
-              "disabling median scaling, scaling by {}".format(STEREO_SCALE_FACTOR))
-        opt.disable_median_scaling = True
-        opt.pred_depth_scale_factor = STEREO_SCALE_FACTOR
+        raise ValueError("Not supported for carla")
     else:
         print("   Mono evaluation - using median scaling")
 
     gt_depth_dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
                                     [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True,
-                                    load_color=False)
+                                    load_color=False, width=opt.width, height=opt.height)
     gt_depth_dataloader = DataLoader(gt_depth_dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                      pin_memory=True, drop_last=False)
 
     errors = []
     ratios = []
 
-    if Path("~/imgs/").exists():
-        shutil.rmtree("~/imgs/", ignore_errors=True)
+    if opt.eval_model is not None:
+
+        image_dir = opt.eval_model / "eval_images"
+        if image_dir.exists():
+            shutil.rmtree(image_dir)
+
+        image_dir.mkdir()
 
     i = 0
     for gt_data in tqdm(gt_depth_dataloader):
@@ -221,25 +231,16 @@ def evaluate(opt):
         pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
         all_pred_depth = 1 / pred_disp
 
-        # if opt.eval_split == "eigen":
-        #     mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
-        #
-        #     crop = np.array([0.40810811 * gt_height, 0.99189189 * gt_height,
-        #                      0.03594771 * gt_width, 0.96405229 * gt_width]).astype(np.int32)
-        #     crop_mask = np.zeros(mask.shape)
-        #     crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = 1
-        #     mask = np.logical_and(mask, crop_mask)
-        #
-        # else:
-        #     mask = all_gt_depth > 0
-
         mask = np.logical_and(all_gt_depth > MIN_DEPTH, all_gt_depth < MAX_DEPTH)
 
         pred_depth = all_pred_depth[mask]
         gt_depth = all_gt_depth[mask]
 
-        all_gt_depth[np.logical_not(mask)] = 0
-        all_pred_depth[np.logical_not(mask)] = 0
+        all_gt_depth[all_gt_depth > MAX_DEPTH] = MAX_DEPTH
+        all_gt_depth[all_gt_depth < MIN_DEPTH] = MIN_DEPTH
+
+        all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
+        all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
 
         pred_depth *= opt.pred_depth_scale_factor
         all_pred_depth *= opt.pred_depth_scale_factor
@@ -255,17 +256,9 @@ def evaluate(opt):
         all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
         all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
 
-        if i % 500 == 0:
-            if not Path("~/imgs/").exists():
-                Path("~/imgs/").mkdir(exist_ok=True)
-
-            # gt_max = np.nanmax(all_gt_depth)
-            # pred_max = np.nanmax(all_pred_depth)
-            # print(gt_max, pred_max)
-            all_gt_depth = 256 * all_gt_depth / np.nanmax(all_gt_depth)
-            all_pred_depth = 256 * all_pred_depth / np.nanmax(all_pred_depth)
-            imsave(f"~/imgs/{i}_gt_depth.png", all_gt_depth)
-            imsave(f"~/imgs/{i}_pred_depth.png", all_pred_depth)
+        if opt.eval_model is not None and i % 500 == 0:
+            save_depth_image(str(image_dir / f"{i}_gt_depth.png"), all_gt_depth)
+            save_depth_image(str(image_dir / f"{i}_pred_depth.png"), all_pred_depth)
 
         errors.append(compute_errors(gt_depth, pred_depth))
         i += 1
