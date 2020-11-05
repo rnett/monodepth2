@@ -38,27 +38,45 @@ class CarlaDataset(data.Dataset):
                  load_depth=False,
                  load_color=True,
                  height=None,
-                 width=None):
+                 width=None,
+                 exclude_stationary=True):
         super(data.Dataset, self).__init__()
 
         # index -> (source to use, index in source)
         self.sources = []
 
         self.is_cubemap = is_cubemap
+        self.frame_idxs = frame_idxs
 
-        # TODO multiplier of offsets in frame_idxs
-        self.frame_multiplier = 1
-
-        # TODO currently using every other frame
+        # TODO removing stationary frames by default
+        removed = 0
         for c in configs:
             s: DataSource = get_source(c)
-            with s as d:
-                frames = (d.color.shape[0] - 2 * self.frame_multiplier)
-            for j in range(frames):
-                if self.is_cubemap:
-                    self.sources.append((c.pinhole_data, j + self.frame_multiplier))
-                else:
-                    self.sources.append((s, j + self.frame_multiplier))
+            with c.pose_data as pd:
+                pose = pd.absolute_pose
+
+                with s as d:
+                    frames = (d.color.shape[0] - 2)
+
+                    for j in range(frames):
+                        index = j + 1
+                        center_pose = pose[index][:3]
+                        poses = []
+                        for i in self.frame_idxs:
+                            if i == 0:
+                                continue
+                            frame_idx = index + i
+                            poses.append(pose[frame_idx][:3])
+
+                        min_dist = min([np.linalg.norm(center_pose - p) for p in poses]) if len(poses) > 0 else 100
+
+                        if min_dist > 0.25 or not exclude_stationary:
+                            if self.is_cubemap:
+                                self.sources.append((c.pinhole_data, index))
+                            else:
+                                self.sources.append((s, index))
+                        else:
+                            removed += 1
 
         self.height = height or intrinsics.height
         self.width = width or intrinsics.width
@@ -169,7 +187,7 @@ class CarlaDataset(data.Dataset):
         with source as d:
             if self.load_color:
                 for i in self.frame_idxs:
-                    offset = i * self.frame_multiplier
+                    offset = i
                     if self.is_cubemap:
                         d: SplitData
                         for s in list(Side):

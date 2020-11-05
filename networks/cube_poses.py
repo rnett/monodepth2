@@ -54,7 +54,7 @@ def change_basis(pose, change):
     return change @ pose @ change.T
 
 class CubePosesAndLoss(nn.Module):
-    def __init__(self, include_loss=True):
+    def __init__(self, include_loss=True, normalize_poses=True):
         super(CubePosesAndLoss, self).__init__()
 
         rot = np.pi / 2
@@ -69,9 +69,16 @@ class CubePosesAndLoss(nn.Module):
 
         self.filler = nn.Parameter(torch.from_numpy(np.array([0, 0, 0, 1], dtype='float32')), requires_grad=False)
 
+        self.normalize_poses = normalize_poses
         self.include_loss = include_loss
 
     def forward(self, T: Tensor) -> (Tensor, Tensor):
+        if not self.normalize_poses:
+            if self.include_loss:
+                return torch.zeros([1]).to(T.device), T
+            else:
+                return T
+
         top, bottom, left, right, front, back = sides_from_batch(T)
 
         # make all poses from forward's PoV

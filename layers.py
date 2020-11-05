@@ -349,7 +349,7 @@ class Project3D(nn.Module):
 
                 mag_values = torch.sign(side_world_coords).permute(0, 2, 1).gather(dim=-1, index=mags.permute(0, 2, 1)).squeeze(dim=2)
 
-                mags = (mags + 1) * mag_values.unsqueeze(1)
+                mags = (mags.type(torch.float32) + 1) * mag_values.unsqueeze(1)
 
                 # Axes: X is Right, Y is Down, Z is Forward
                 # 1 -> +X -> Right, -1 -> -X -> Left, 2 -> Y -> Bottom, -2 -> -Y -> Top, 3 -> Z -> Front, -3 -> -Z -> Back

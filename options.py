@@ -107,6 +107,9 @@ class MonodepthOptions:
                                  help="lambda factor for cube pose loss",
                                  type=float,
                                  default=1)
+        # self.parser.add_argument("--dont_normalize_poses",
+        #                          help="lambda factor for cube pose loss",
+        #                          action="store_false")
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
@@ -116,7 +119,7 @@ class MonodepthOptions:
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
-                                 default=2e-4)
+                                 default=1e-4)
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",

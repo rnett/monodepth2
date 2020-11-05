@@ -10,13 +10,15 @@ import torch
 from carla_dataset.config import load_csv
 from collections import OrderedDict
 
-from imageio import imsave
+from carla_dataset.data import Side
+from imageio import imsave, imwrite
 from pathlib import Path
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from carla_utils import convert_to_cubemap_batch, get_datasets, get_params
 from datasets.carla_dataset_loader import CarlaDataset
+from depth_utils import normalize_depth_for_display
 from layers import disp_to_depth
 from utils import readlines
 from options import Mode, MonodepthOptions
@@ -47,6 +49,10 @@ def un_mod(weights: OrderedDict):
 def compute_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
     """
+
+    if np.size(gt) == 0:
+        return 0, 0, 0, 0, 1, 1, 1, 1, 1
+
     thresh = np.maximum((gt / pred), (pred / gt))
     a1 = (thresh < 1.25).astype('float32').mean()
     a2 = (thresh < 1.25 ** 2).astype('float32').mean()
@@ -78,25 +84,21 @@ def batch_post_process_disparity(l_disp, r_disp):
     return r_mask * l_disp + l_mask * r_disp + (1.0 - l_mask - r_mask) * m_disp
 
 
-def gray2rgb(im, cmap='gray'):
-    import matplotlib
-    matplotlib.use('agg')
-    import matplotlib.pyplot as plt  # doesn't work in docker
-    cmap = plt.get_cmap(cmap)
-    rgba_img = cmap(im.astype(np.float32))
-    rgb_img = np.delete(rgba_img, 3, 2)
-    return rgb_img
-
-
-def normalize_depth_for_display(depth, cmap='plasma'):
-    depth = depth / np.nanmax(depth)
-    depth = gray2rgb(depth, cmap=cmap)
-    return (depth) * 255
-
 
 def save_depth_image(path, img):
     depth = normalize_depth_for_display(img)
     imsave(path, depth)
+
+
+def unbatch_cubemap(dataloader, mode, depth: bool):
+    for batch in dataloader:
+        if mode is Mode.Cubemap:
+            if depth:
+                batch = convert_to_cubemap_batch(batch, [0], [0], do_color=False)
+            else:
+                batch = convert_to_cubemap_batch(batch, [0], [0])
+
+        yield batch
 
 
 def evaluate(opt):
@@ -109,104 +111,59 @@ def evaluate(opt):
     assert sum((opt.eval_mono, opt.eval_stereo)) == 1, \
         "Please choose mono or stereo evaluation by setting either --eval_mono or --eval_stereo"
 
-    if opt.ext_disp_to_eval is None:
-
-        if opt.eval_model is None:
-            opt.load_weights_folder = os.path.expanduser(opt.load_weights_folder)
-        else:
-            if opt.load_weights_folder is not None:
-                raise ValueError("Can't specify eval_model and load_weights_folder, they conflict")
-
-            opt.eval_model = Path(opt.eval_model)
-            models = Path(opt.eval_model) / "models"
-            weights = [p for p in models.iterdir() if p.name.startswith("weights")]
-            weights = [int(p.name.split("_")[1]) for p in weights]
-            opt.load_weights_folder = models / f"weights_{max(weights)}"
-
-        assert os.path.isdir(opt.load_weights_folder), \
-            "Cannot find a folder at {}".format(opt.load_weights_folder)
-
-        print("-> Loading weights from {}".format(opt.load_weights_folder))
-
-        encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
-        decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
-
-        encoder_dict = un_mod(torch.load(encoder_path))
-
-        conv_layer, data_lambda, intrinsics = get_params(opt)
-        dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
-                               [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, width=opt.width, height=opt.height)
-        dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
-                                pin_memory=True, drop_last=False)
-
-        encoder = networks.ResnetEncoder(conv_layer, opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(conv_layer, encoder.num_ch_enc)
-
-        model_dict = encoder.state_dict()
-        encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        depth_decoder.load_state_dict(un_mod(torch.load(decoder_path)))
-
-        encoder.cuda()
-        encoder.eval()
-        depth_decoder.cuda()
-        depth_decoder.eval()
-
-        pred_disps = []
-
-        print("-> Computing predictions with size {}x{}".format(
-            encoder_dict['width'], encoder_dict['height']))
-
-        with torch.no_grad():
-            for data in tqdm(dataloader):
-                if opt.mode is Mode.Cubemap:
-                    data = convert_to_cubemap_batch(data, [0], 4)
-                input_color = data[("color", 0, 0)].cuda()
-
-                if opt.post_process:
-                    # Post-processed results require each image to have two forward passes
-                    input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
-
-                output = depth_decoder(encoder(input_color))
-
-                pred_disp, _ = disp_to_depth(output[("disp", 0)], opt.min_depth, opt.max_depth)
-                pred_disp = pred_disp.cpu()[:, 0].numpy()
-
-                if opt.post_process:
-                    N = pred_disp.shape[0] // 2
-                    pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
-
-                pred_disps.append(pred_disp)
-
-        pred_disps = np.concatenate(pred_disps)
-
+    if opt.eval_model is None:
+        opt.load_weights_folder = os.path.expanduser(opt.load_weights_folder)
     else:
-        raise ValueError("Not supported for carla")
+        if opt.load_weights_folder is not None:
+            raise ValueError("Can't specify eval_model and load_weights_folder, they conflict")
 
-    if opt.save_pred_disps:
-        output_path = os.path.join(
-            opt.load_weights_folder, "disps_{}_split.npy".format(opt.eval_split))
-        print("-> Saving predicted disparities to ", output_path)
-        np.save(output_path, pred_disps)
+        opt.eval_model = Path(opt.eval_model)
+        models = Path(opt.eval_model) / "models"
+        weights = [p for p in models.iterdir() if p.name.startswith("weights")]
+        weights = [int(p.name.split("_")[1]) for p in weights]
+        opt.load_weights_folder = models / f"weights_{max(weights)}" #
 
-    if opt.no_eval:
-        print("-> Evaluation disabled. Done.")
-        quit()
+    assert os.path.isdir(opt.load_weights_folder), \
+        "Cannot find a folder at {}".format(opt.load_weights_folder)
 
-    elif opt.eval_split == 'benchmark':
-        raise ValueError("Not supported for carla")
+    print("-> Loading weights from {}".format(opt.load_weights_folder))
 
-    print("-> Evaluating")
+    encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
+    decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
-    if opt.eval_stereo:
-        raise ValueError("Not supported for carla")
-    else:
-        print("   Mono evaluation - using median scaling")
+    encoder_dict = un_mod(torch.load(encoder_path))
+
+    conv_layer, data_lambda, intrinsics = get_params(opt)
+    dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
+                           [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, width=opt.width,
+                           height=opt.height)
+    dataloader = DataLoader(dataset, opt.batch_size, shuffle=False, num_workers=opt.num_workers,
+                            pin_memory=True, drop_last=False)
+
+    data_iter = unbatch_cubemap(dataloader, opt.mode, False)
+
+    encoder = networks.ResnetEncoder(conv_layer, opt.num_layers, False)
+    depth_decoder = networks.DepthDecoder(conv_layer, encoder.num_ch_enc)
+
+    model_dict = encoder.state_dict()
+    encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
+    depth_decoder.load_state_dict(un_mod(torch.load(decoder_path)))
+
+    encoder.cuda()
+    encoder.eval()
+    depth_decoder.cuda()
+    depth_decoder.eval()
+
+    print("-> Computing predictions with size {}x{}".format(
+        encoder_dict['width'], encoder_dict['height']))
 
     gt_depth_dataset = CarlaDataset(load_csv(opt.test_data), data_lambda, intrinsics,
                                     [0], 1, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, load_depth=True,
                                     load_color=False, width=opt.width, height=opt.height)
     gt_depth_dataloader = DataLoader(gt_depth_dataset, 1, shuffle=False, num_workers=opt.num_workers,
                                      pin_memory=True, drop_last=False)
+
+    gt_depth_iterator = unbatch_cubemap(gt_depth_dataloader, opt.mode, True)
 
     errors = []
     ratios = []
@@ -220,48 +177,90 @@ def evaluate(opt):
         image_dir.mkdir()
 
     i = 0
-    for gt_data in tqdm(gt_depth_dataloader):
-        if opt.mode is Mode.Cubemap:
-            gt_data = convert_to_cubemap_batch(gt_data, [0], 4, do_color=False)
 
-        all_gt_depth = gt_data["depth_gt"].squeeze().numpy()
-        gt_height, gt_width = all_gt_depth.shape[:2]
+    data_len = len(gt_depth_dataloader)
+    if opt.mode is Mode.Cubemap:
+        data_len *= 6
+    pbar = tqdm(total=data_len, desc="Evaluating")
 
-        pred_disp = pred_disps[i]
-        pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
-        all_pred_depth = 1 / pred_disp
+    with torch.no_grad():
+        for data in data_iter:
+            input_color = data[("color", 0, 0)].cuda()
 
-        mask = np.logical_and(all_gt_depth > MIN_DEPTH, all_gt_depth < MAX_DEPTH)
+            if opt.post_process:
+                # Post-processed results require each image to have two forward passes
+                input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
 
-        pred_depth = all_pred_depth[mask]
-        gt_depth = all_gt_depth[mask]
+            output = depth_decoder(encoder(input_color))
 
-        all_gt_depth[all_gt_depth > MAX_DEPTH] = MAX_DEPTH
-        all_gt_depth[all_gt_depth < MIN_DEPTH] = MIN_DEPTH
+            pred_disp_batch, _ = disp_to_depth(output[("disp", 0)], opt.min_depth, opt.max_depth)
+            pred_disp_batch = pred_disp_batch.cpu()[:, 0].numpy()
 
-        all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
-        all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
+            if opt.post_process:
+                N = pred_disp_batch.shape[0] // 2
+                pred_disp_batch = batch_post_process_disparity(pred_disp_batch[:N], pred_disp_batch[N:, :, ::-1])
 
-        pred_depth *= opt.pred_depth_scale_factor
-        all_pred_depth *= opt.pred_depth_scale_factor
-        if not opt.disable_median_scaling:
-            ratio = np.median(gt_depth) / np.median(pred_depth)
-            ratios.append(ratio)
-            pred_depth *= ratio
-            all_pred_depth *= ratio
+            if opt.mode is Mode.Cubemap:
+                pred_disp_batch = np.split(pred_disp_batch, pred_disp_batch.shape[0] // 6)
 
-        pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
-        pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
+            for pred_disp_b in pred_disp_batch:
+                gt_data = next(gt_depth_iterator)
+                all_gt_depth_b = gt_data["depth_gt"].squeeze().numpy()
 
-        all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
-        all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
+                assert np.ndim(pred_disp_b) == np.ndim(all_gt_depth_b)
 
-        if opt.eval_model is not None and i % 500 == 0:
-            save_depth_image(str(image_dir / f"{i}_gt_depth.png"), all_gt_depth)
-            save_depth_image(str(image_dir / f"{i}_pred_depth.png"), all_pred_depth)
+                if np.ndim(pred_disp_b) < 3:
+                    pred_disp_b = np.expand_dims(pred_disp_b, 0)
+                    all_gt_depth_b = np.expand_dims(all_gt_depth_b, 0)
 
-        errors.append(compute_errors(gt_depth, pred_depth))
-        i += 1
+                for pred_disp, all_gt_depth in zip(pred_disp_b, all_gt_depth_b):
+                    gt_height, gt_width = all_gt_depth.shape[:2]
+
+                    # pred_disp = pred_disps[i]
+                    pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
+                    all_pred_depth = 1 / pred_disp
+                    all_pred_depth = np.nan_to_num(all_pred_depth, nan=MAX_DEPTH + 1, posinf=MAX_DEPTH + 1,
+                                                   neginf=MIN_DEPTH)
+
+                    mask = np.logical_and(all_gt_depth > MIN_DEPTH, all_gt_depth < MAX_DEPTH)
+
+                    pred_depth = all_pred_depth[mask]
+                    gt_depth = all_gt_depth[mask]
+
+                    pred_depth *= opt.pred_depth_scale_factor
+                    all_pred_depth *= opt.pred_depth_scale_factor
+                    if not opt.disable_median_scaling:
+                        if np.size(gt_depth) == 0:
+                            ratio = 1
+                        else:
+                            ratio = np.median(gt_depth) / np.median(pred_depth)
+                        ratios.append(ratio)
+
+                        pred_depth *= ratio
+                        all_pred_depth *= ratio
+
+                    pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
+                    pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
+
+                    all_pred_depth[all_pred_depth < MIN_DEPTH] = MIN_DEPTH
+                    all_pred_depth[all_pred_depth > MAX_DEPTH] = MAX_DEPTH
+
+                    all_gt_depth[all_gt_depth > MAX_DEPTH] = MAX_DEPTH
+                    all_gt_depth[all_gt_depth < MIN_DEPTH] = MIN_DEPTH
+
+                    if opt.eval_model is not None and i % 600 == 0:
+                        save_depth_image(str(image_dir / f"{i}_gt_depth.png"), all_gt_depth)
+                        save_depth_image(str(image_dir / f"{i}_pred_depth.png"), all_pred_depth)
+
+                    errors.append(compute_errors(gt_depth, pred_depth))
+                    i += 1
+                    pbar.update()
+
+    pbar.close()
+    if opt.eval_stereo:
+        raise ValueError("Not supported for carla")
+    else:
+        print("   Mono evaluation - using median scaling")
 
     if not opt.disable_median_scaling:
         ratios = np.array(ratios)

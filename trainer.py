@@ -30,6 +30,7 @@ from tqdm import tqdm, trange
 
 from carla_utils import convert_to_cubemap_batch, get_datasets, get_params
 from datasets.carla_dataset_loader import CarlaDataset
+from depth_utils import normalize_depth_for_display
 from networks.cube_padding import CubicConv2d, sides_from_batch
 from networks.cube_poses import CubePosesAndLoss
 from networks.cylindrical_padding import CylindricalConv2d
@@ -46,6 +47,7 @@ from IPython import embed
 class Trainer:
     def __init__(self, options):
         self.opt = options
+
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
         Path(self.log_path).mkdir(exist_ok=True, parents=True)
@@ -79,6 +81,9 @@ class Trainer:
 
         conv_layer, data_lambda, intrinsics = get_params(options)
         self.intrinsics = intrinsics
+
+        self.height = self.opt.height or self.intrinsics.height
+        self.width = self.opt.width or self.intrinsics.width
 
         self.models["encoder"] = networks.ResnetEncoder(conv_layer,
                                                         self.opt.num_layers, self.opt.weights_init == "pretrained")
@@ -161,8 +166,8 @@ class Trainer:
         self.backproject_depth = {}
         self.project_3d = {}
         for scale in self.opt.scales:
-            h = intrinsics.height // (2 ** scale)
-            w = intrinsics.width // (2 ** scale)
+            h = self.height // (2 ** scale)
+            w = self.width // (2 ** scale)
 
             # TODO should be able to paralalize
             self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w, options.mode)
@@ -248,7 +253,7 @@ class Trainer:
             before_op_time = time.time()
 
             # with torch.autograd.detect_anomaly():
-            outputs, losses = self.process_batch(inputs, batch_idx == batches - 1)
+            outputs, losses = self.process_batch(inputs, batch_idx if batch_idx % 200 == 0 else 0)
 
             losses["loss"].backward()
             self.model_optimizer.step()
@@ -275,7 +280,7 @@ class Trainer:
         pbar.close()
         self.model_lr_scheduler.step()
 
-    def process_batch(self, inputs, save_images=False):
+    def process_batch(self, inputs, save_images=0):
         """Pass a minibatch through the network and generate images and losses
         """
         for key, ipt in inputs.items():
@@ -414,7 +419,7 @@ class Trainer:
                 source_scale = scale
             else:
                 disp = F.interpolate(
-                    disp, [self.intrinsics.height, self.intrinsics.width], mode="bilinear", align_corners=False)
+                    disp, [self.height, self.width], mode="bilinear", align_corners=False)
                 source_scale = 0
 
             _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
@@ -493,7 +498,7 @@ class Trainer:
 
         return reprojection_loss
 
-    def compute_losses(self, inputs, outputs, save_images=False):
+    def compute_losses(self, inputs, outputs, save_images=0):
         """Compute the reprojection and smoothness losses for a minibatch
         """
 
@@ -514,25 +519,30 @@ class Trainer:
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
 
+            idx = 0 if not self.opt.mode is Mode.Cubemap else 4
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
 
-                dir = Path(self.log_path) / f"images/epoch_{self.epoch}/scale_{scale}/frame_{frame_id}"
+                if save_images > 0 and scale == 0:
+                    dir = Path(self.log_path) / f"images/epoch_{self.epoch}/batch_{save_images}/frame_{frame_id}"
 
-                if save_images:
                     original = inputs[("color", frame_id, source_scale)]
-                    original_aug = inputs[("color_aug", frame_id, source_scale)]
                     dir.mkdir(parents=True, exist_ok=True)
-                    p = pred[0, ...].permute(1, 2, 0) * 256
-                    t = target[0, ...].permute(1, 2, 0) * 256
-                    o = original[0, ...].permute(1, 2, 0) * 256
-                    oa = original_aug[0, ...].permute(1, 2, 0) * 256
+
+                    p = pred.detach()[idx, ...].permute(1, 2, 0) * 256
+                    t = target.detach()[idx, ...].permute(1, 2, 0) * 256
+                    o = original.detach()[idx, ...].permute(1, 2, 0) * 256
+
                     imwrite(dir / f"pred.png", p.cpu().detach().numpy())
                     imwrite(dir / f"target.png", t.cpu().detach().numpy())
                     imwrite(dir / f"original.png", o.cpu().detach().numpy())
-                    imwrite(dir / f"original_aug.png", oa.cpu().detach().numpy())
 
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
+
+            if save_images > 0 and scale == 0:
+                dir = Path(self.log_path) / f"images/epoch_{self.epoch}/batch_{save_images}/"
+                d, _ = disp_to_depth(disp.detach()[idx, ...], self.opt.min_depth, self.opt.max_depth)
+                imwrite(dir / f"depth.png", normalize_depth_for_display(d.cpu().detach().squeeze().numpy()))
 
             reprojection_losses = torch.cat(reprojection_losses, 1)
 
@@ -556,7 +566,7 @@ class Trainer:
                 mask = outputs["predictive_mask"]["disp", scale]
                 if not self.opt.v1_multiscale:
                     mask = F.interpolate(
-                        mask, [self.intrinsics.height, self.intrinsics.width],
+                        mask, [self.height, self.width],
                         mode="bilinear", align_corners=False)
 
                 reprojection_losses *= mask
@@ -717,8 +727,8 @@ class Trainer:
             to_save = model.state_dict()
             if model_name == 'encoder':
                 # save the sizes - these are needed at prediction time
-                to_save['height'] = self.intrinsics.height
-                to_save['width'] = self.intrinsics.width
+                to_save['height'] = self.height
+                to_save['width'] = self.width
                 to_save['use_stereo'] = self.opt.use_stereo
             torch.save(to_save, save_path)
 

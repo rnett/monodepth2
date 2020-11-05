@@ -5,8 +5,8 @@ if __name__ == '__main__':
     configs = expand_wildcards(rain=Rain.Clear, sunset=False)
     pbar = tqdm(configs, ncols=200)
     for config in pbar:
-        # config.cylindrical_data.download()
         pbar.set_postfix_str(f"Downloading {config.pinhole_data.download_file}")
         print()
-        file = config.pinhole_data.download()
-        # config.pose_data.download()
+        # config.cylindrical_data.download()
+        config.pinhole_data.download(force=True)
+        config.pose_data.download(force=True)

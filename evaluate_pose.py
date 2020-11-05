@@ -7,6 +7,8 @@
 from __future__ import absolute_import, division, print_function
 
 import os
+from pathlib import Path
+
 import numpy as np
 
 import torch
@@ -74,8 +76,6 @@ def get_gt_poses(configs: List[Config]):
 def evaluate(opt):
     """Evaluate odometry on the KITTI dataset
     """
-    assert os.path.isdir(opt.load_weights_folder), \
-        "Cannot find a folder at {}".format(opt.load_weights_folder)
 
     conv_layer, data_lambda, intrinsics = get_params(opt)
     configs = load_csv(opt.test_data)
@@ -83,6 +83,21 @@ def evaluate(opt):
                            [0, 1], 4, is_train=False, is_cubemap=opt.mode is Mode.Cubemap, width=opt.width, height=opt.height)
     dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                             pin_memory=True, drop_last=False)
+
+    if opt.eval_model is None:
+        opt.load_weights_folder = os.path.expanduser(opt.load_weights_folder)
+    else:
+        if opt.load_weights_folder is not None:
+            raise ValueError("Can't specify eval_model and load_weights_folder, they conflict")
+
+        opt.eval_model = Path(opt.eval_model)
+        models = Path(opt.eval_model) / "models"
+        weights = [p for p in models.iterdir() if p.name.startswith("weights")]
+        weights = [int(p.name.split("_")[1]) for p in weights]
+        opt.load_weights_folder = models / f"weights_{max(weights)}" #
+
+    assert os.path.isdir(opt.load_weights_folder), \
+        "Cannot find a folder at {}".format(opt.load_weights_folder)
 
     pose_encoder_path = os.path.join(opt.load_weights_folder, "pose_encoder.pth")
     pose_decoder_path = os.path.join(opt.load_weights_folder, "pose.pth")

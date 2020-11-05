@@ -1,4 +1,66 @@
-# Monodepth2
+# Monodepth2 - Panoramic
+
+This is a fork of the reference PyTorch implementation of monodepth2, which is described in
+> **Digging into Self-Supervised Monocular Depth Prediction**
+>
+> [Clément Godard](http://www0.cs.ucl.ac.uk/staff/C.Godard/), [Oisin Mac Aodha](http://vision.caltech.edu/~macaodha/), [Michael Firman](http://www.michaelfirman.co.uk) and [Gabriel J. Brostow](http://www0.cs.ucl.ac.uk/staff/g.brostow/)  
+>
+> [ICCV 2019](https://arxiv.org/abs/1806.01260)
+
+It is used in my thesis *Dataset and Evaluation of Self-Supervised Learning for Panoramic Depth Estimation*.
+
+# Modifications
+
+The exact modifications are easily available in the git history.  All changed files:
+ * datasets
+     * carla_dataset_loader.py
+ * networks
+     * cube_padding.py
+     * cube_poses.py
+     * cylindrical_padding.py
+     * depth_decoder.py
+     * panoramic_resnet.py
+     * pose_cnn.py
+     * pose_decoder.py
+     * resnet_encoder.py
+ * .gitignore
+ * carla_utils.py
+ * depth_utils.py
+ * download_carla.py
+ * evaluate_depth.py
+ * evaluate_pose.py
+ * layers.py
+ * options.py
+ * plasmize.py
+ * README.md
+ * test_data.csv
+ * train.py
+ * train_data.csv
+ * trainer.py
+ * val_data.csv
+
+Their purpose is to add support for cylindrical and cubemap panoramas, and to use the CARLA Panoramic Depth Detection Dataset generated and used in my thesis.
+
+PyCharm project files were also added.
+
+The cylindrical support is based on methods from [Unsupervised Learning of Depth and Ego-Motion From Cylindrical Panoramic Video](https://ieeexplore.ieee.org/document/8942315/) by Sharma, Alisha and Ventura, Jonathan.
+It is primarily implemented in `networks/cylindrical_padding.py` and `layers.py` (for reprojection).
+
+The cubemap support is based on methods from [Cube Padding for Weakly-Supervised Saliency Prediction in 360 Videos](http://arxiv.org/abs/1806.01320) by 
+Cheng, Hsien-Tzu and Chao, Chun-Hung and Dong, Jin-Dong and Wen, Hao-Kai and Liu, Tyng-Luh and Sun, Min, and from 
+[Image Quality Assessment: From Error Visibility to Structural Similarity](http://ieeexplore.ieee.org/document/1284395/).
+It is primarily implemented in `networks/cube_padding.py`, `networks/cube_poses.py` and `layers.py` (for reprojection).
+
+The dataset support is in `datasets/carla_dataset_loader.py`.  Training and evaluation code has been modified to support it, and for utility reasons (i.e. debugging output).
+
+`depth_utils.py`, `carla_utils.py`, `download_carla.py`, and `plasmize.py` are all utility functions and scripts.
+
+`train_data.csv`, `val_data.csv`, and `test_data.csv` are the data splits used.
+
+`panoramic_resnet.py` is a copy of PyTorch's resnet implantation with the convolution layer parameterized, so that I can use my custom padding layers.
+The other changes in the network classes are mostly to do the same for them.
+
+# Original Readme
 
 This is the reference PyTorch implementation for training and testing depth estimation models using the method described in
 
@@ -28,8 +90,6 @@ If you find our work useful in your research please consider citing our paper:
 year = {2019}
 }
 ```
-
-
 
 ## ⚙️ Setup
 
